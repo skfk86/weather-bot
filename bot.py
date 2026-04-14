@@ -17,17 +17,29 @@ from threading import Thread
 # ==================== الإعدادات (متغيرات البيئة) ====================
 TOKEN = os.environ.get("BOT_TOKEN", "8665720382:AAEzrjTSqC5Gt5QXXu-gWfYu-vkUodOfwGw")
 OXAPAY_KEY = os.environ.get("OXAPAY_KEY", "LYMACY-HJVRXA-D02BTO-AHUK8R")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")  # مفتاح Groq API في متغير البيئة
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY", "")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "8188643525"))
-MY_ACCOUNT = os.environ.get("BANK_ACCOUNT", "4636998")
 USD_TO_SDG_RATE = int(os.environ.get("USD_TO_SDG_RATE", "3600"))
 DEVELOPER_WHATSAPP = os.environ.get("DEV_WHATSAPP", "249901758765")
 
-# أرقام المحافظ الإلكترونية (بدون فودافون كاش)
-FAWRY_NUMBER = os.environ.get("FAWRY_NUMBER", "0123456789")
-BRAVO_NUMBER = os.environ.get("BRAVO_NUMBER", "0123456789")
-MYCASH_NUMBER = os.environ.get("MYCASH_NUMBER", "0123456789")
+# ==================== معلومات الحسابات البنكية والمحافظ ====================
+# تحويل بنكي (بنكك)
+BANK_ACCOUNT = "4636998"
+BANK_NAME = "بنك الخرطوم"
+
+# فوري - بنك فيصل الإسلامي
+FAWRY_BANK = "بنك فيصل الإسلامي"
+FAWRY_ACCOUNT_NAME = "القاسم احمد محمد"
+FAWRY_ACCOUNT_NUMBER = "51663519"
+
+# برافو
+BRAVO_NAME = "علي القاسم"
+BRAVO_NUMBER = "71062333"
+
+# ماي كاشي
+MYCASH_NAME = "علي القاسم"
+MYCASH_NUMBER = "400569264"
 
 OXAPAY_CREATE_URL = 'https://api.oxapay.com/merchants/request'
 OXAPAY_INQUIRY_URL = 'https://api.oxapay.com/merchants/inquiry'
@@ -44,7 +56,6 @@ if not OPENWEATHER_API_KEY:
     logger.warning("OPENWEATHER_API_KEY غير مضبوط. ميزة الطقس المباشر معطلة.")
 
 # ==================== حل مشكلة تعدد النسخ ====================
-# إزالة webhook قبل البدء
 try:
     bot = telebot.TeleBot(TOKEN, threaded=False)
     bot.remove_webhook()
@@ -395,13 +406,13 @@ def analyze_bank_receipt(image_base64):
     حلل صورة إشعار تحويل بنكي من تطبيق بنكك واستخرج بدقة:
     
     المعلومات المطلوبة:
-    1. رقم الحساب المستلم (يجب أن يكون: {MY_ACCOUNT})
+    1. رقم الحساب المستلم (يجب أن يكون: {BANK_ACCOUNT})
     2. المبلغ المحول بالجنيه السوداني (رقم فقط)
     3. رقم العملية/الإشعار (رقم المرجع)
     4. تاريخ ووقت التحويل (بصيغة YYYY-MM-DD HH:MM)
     
     قواعد التحقق الصارمة:
-    - يجب أن يكون رقم الحساب المستلم مطابقاً تماماً لـ {MY_ACCOUNT}
+    - يجب أن يكون رقم الحساب المستلم مطابقاً تماماً لـ {BANK_ACCOUNT}
     - يجب أن يكون المبلغ رقماً واضحاً
     - يجب أن يكون رقم العملية موجوداً وغير مستخدم مسبقاً
     - يجب أن يكون التاريخ والوقت حديثين (خلال 24 ساعة)
@@ -425,20 +436,22 @@ def analyze_bank_receipt(image_base64):
         return None
 
 def analyze_fawry_receipt(image_base64):
-    """تحليل إيصال فوري"""
+    """تحليل إيصال فوري - بنك فيصل الإسلامي"""
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     prompt = f"""
-    حلل صورة إشعار تحويل فوري واستخرج بدقة:
+    حلل صورة إشعار تحويل فوري (بنك فيصل الإسلامي) واستخرج بدقة:
     
     المعلومات المطلوبة:
-    1. رقم الهاتف المستلم (يجب أن يكون: {FAWRY_NUMBER})
-    2. المبلغ المحول بالجنيه السوداني (رقم فقط)
-    3. رقم العملية/الإشعار (رقم المرجع)
-    4. تاريخ ووقت التحويل (بصيغة YYYY-MM-DD HH:MM)
+    1. رقم الحساب المستلم (يجب أن يكون: {FAWRY_ACCOUNT_NUMBER})
+    2. اسم المستلم (يجب أن يكون: {FAWRY_ACCOUNT_NAME})
+    3. المبلغ المحول بالجنيه السوداني (رقم فقط)
+    4. رقم العملية/الإشعار (رقم المرجع)
+    5. تاريخ ووقت التحويل (بصيغة YYYY-MM-DD HH:MM)
     
     قواعد التحقق الصارمة:
-    - يجب أن يكون رقم الهاتف المستلم مطابقاً تماماً لـ {FAWRY_NUMBER}
+    - يجب أن يكون رقم الحساب المستلم مطابقاً تماماً لـ {FAWRY_ACCOUNT_NUMBER}
+    - يجب أن يكون اسم المستلم مطابقاً لـ {FAWRY_ACCOUNT_NAME}
     - يجب أن يكون المبلغ رقماً واضحاً
     - يجب أن يكون رقم العملية موجوداً وغير مستخدم مسبقاً
     - يجب أن يكون التاريخ والوقت حديثين (خلال 24 ساعة)
@@ -471,12 +484,14 @@ def analyze_bravo_receipt(image_base64):
     
     المعلومات المطلوبة:
     1. رقم الهاتف المستلم (يجب أن يكون: {BRAVO_NUMBER})
-    2. المبلغ المحول بالجنيه السوداني (رقم فقط)
-    3. رقم العملية/الإشعار (رقم المرجع)
-    4. تاريخ ووقت التحويل (بصيغة YYYY-MM-DD HH:MM)
+    2. اسم المستلم (يجب أن يكون: {BRAVO_NAME})
+    3. المبلغ المحول بالجنيه السوداني (رقم فقط)
+    4. رقم العملية/الإشعار (رقم المرجع)
+    5. تاريخ ووقت التحويل (بصيغة YYYY-MM-DD HH:MM)
     
     قواعد التحقق الصارمة:
     - يجب أن يكون رقم الهاتف المستلم مطابقاً تماماً لـ {BRAVO_NUMBER}
+    - يجب أن يكون اسم المستلم مطابقاً لـ {BRAVO_NAME}
     - يجب أن يكون المبلغ رقماً واضحاً
     - يجب أن يكون رقم العملية موجوداً وغير مستخدم مسبقاً
     - يجب أن يكون التاريخ والوقت حديثين (خلال 24 ساعة)
@@ -509,12 +524,14 @@ def analyze_mycash_receipt(image_base64):
     
     المعلومات المطلوبة:
     1. رقم الهاتف المستلم (يجب أن يكون: {MYCASH_NUMBER})
-    2. المبلغ المحول بالجنيه السوداني (رقم فقط)
-    3. رقم العملية/الإشعار (رقم المرجع)
-    4. تاريخ ووقت التحويل (بصيغة YYYY-MM-DD HH:MM)
+    2. اسم المستلم (يجب أن يكون: {MYCASH_NAME})
+    3. المبلغ المحول بالجنيه السوداني (رقم فقط)
+    4. رقم العملية/الإشعار (رقم المرجع)
+    5. تاريخ ووقت التحويل (بصيغة YYYY-MM-DD HH:MM)
     
     قواعد التحقق الصارمة:
     - يجب أن يكون رقم الهاتف المستلم مطابقاً تماماً لـ {MYCASH_NUMBER}
+    - يجب أن يكون اسم المستلم مطابقاً لـ {MYCASH_NAME}
     - يجب أن يكون المبلغ رقماً واضحاً
     - يجب أن يكون رقم العملية موجوداً وغير مستخدم مسبقاً
     - يجب أن يكون التاريخ والوقت حديثين (خلال 24 ساعة)
@@ -775,7 +792,7 @@ def select_plan(call):
     markup.add(
         types.InlineKeyboardButton("💳 دفع بالعملات الرقمية (OxaPay)", callback_data=f"crypto_{plan_name}"),
         types.InlineKeyboardButton("🏦 تحويل بنكي (بنكك)", callback_data=f"bank_{plan_name}"),
-        types.InlineKeyboardButton("💳 فوري", callback_data=f"fawry_{plan_name}"),
+        types.InlineKeyboardButton("💳 فوري - بنك فيصل", callback_data=f"fawry_{plan_name}"),
         types.InlineKeyboardButton("📱 برافو", callback_data=f"bravo_{plan_name}"),
         types.InlineKeyboardButton("💰 ماي كاشي", callback_data=f"mycash_{plan_name}"),
         types.InlineKeyboardButton("« رجوع", callback_data="renew")
@@ -800,19 +817,20 @@ def select_plan(call):
     bot.answer_callback_query(call.id)
 
 # دوال الدفع الموحدة
-def create_payment_method_handler(method_name, method_display, account_number):
-    def handler(call):
-        plan_name = call.data.replace(f"{method_name}_", "")
-        amount = PLANS[plan_name]['sdg']
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
-        markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
-        msg = f"""
-{method_display} **- {plan_name}**
+def handle_bank_payment(call):
+    plan_name = call.data.replace("bank_", "")
+    amount = PLANS[plan_name]['sdg']
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
+    markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+    msg = f"""
+🏦 **تحويل بنكي - {plan_name}**
 
 1️⃣ قم بتحويل **{amount:,} SDG** إلى:
 
-📞 الرقم: `{account_number}`
+📱 رقم الحساب: `{BANK_ACCOUNT}`
+🏛 البنك: {BANK_NAME}
+📲 التطبيق: بنكك
 
 2️⃣ بعد التحويل، أرسل لقطة الشاشة هنا
 
@@ -822,20 +840,90 @@ def create_payment_method_handler(method_name, method_display, account_number):
 • يجب أن يظهر **تاريخ ووقت التحويل**
 • الصورة غير معدلة أو مفوتوشوب
 """
-        bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
-        bot.answer_callback_query(call.id)
-    return handler
+    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.answer_callback_query(call.id)
 
-# تسجيل معالجات طرق الدفع (بدون فودافون كاش)
-payment_methods = [
-    ('bank', '🏦 تحويل بنكي', MY_ACCOUNT),
-    ('fawry', '💳 فوري', FAWRY_NUMBER),
-    ('bravo', '📱 برافو', BRAVO_NUMBER),
-    ('mycash', '💰 ماي كاشي', MYCASH_NUMBER)
-]
+def handle_fawry_payment(call):
+    plan_name = call.data.replace("fawry_", "")
+    amount = PLANS[plan_name]['sdg']
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
+    markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+    msg = f"""
+💳 **فوري - {plan_name}**
 
-for method, display, account in payment_methods:
-    bot.callback_query_handler(func=lambda call, m=method: call.data.startswith(f"{m}_"))(create_payment_method_handler(method, display, account))
+1️⃣ قم بتحويل **{amount:,} SDG** إلى:
+
+🏛 البنك: {FAWRY_BANK}
+👤 اسم المستلم: {FAWRY_ACCOUNT_NAME}
+📱 رقم الحساب: `{FAWRY_ACCOUNT_NUMBER}`
+
+2️⃣ بعد التحويل، أرسل لقطة الشاشة هنا
+
+⚠️ **تنبيهات هامة:**
+• الصورة يجب أن تكون واضحة
+• يجب أن يظهر **رقم العملية** بوضوح
+• يجب أن يظهر **تاريخ ووقت التحويل**
+• الصورة غير معدلة أو مفوتوشوب
+"""
+    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.answer_callback_query(call.id)
+
+def handle_bravo_payment(call):
+    plan_name = call.data.replace("bravo_", "")
+    amount = PLANS[plan_name]['sdg']
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
+    markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+    msg = f"""
+📱 **برافو - {plan_name}**
+
+1️⃣ قم بتحويل **{amount:,} SDG** إلى:
+
+👤 اسم المستلم: {BRAVO_NAME}
+📞 رقم الهاتف: `{BRAVO_NUMBER}`
+
+2️⃣ بعد التحويل، أرسل لقطة الشاشة هنا
+
+⚠️ **تنبيهات هامة:**
+• الصورة يجب أن تكون واضحة
+• يجب أن يظهر **رقم العملية** بوضوح
+• يجب أن يظهر **تاريخ ووقت التحويل**
+• الصورة غير معدلة أو مفوتوشوب
+"""
+    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.answer_callback_query(call.id)
+
+def handle_mycash_payment(call):
+    plan_name = call.data.replace("mycash_", "")
+    amount = PLANS[plan_name]['sdg']
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
+    markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+    msg = f"""
+💰 **ماي كاشي - {plan_name}**
+
+1️⃣ قم بتحويل **{amount:,} SDG** إلى:
+
+👤 اسم المستلم: {MYCASH_NAME}
+📞 رقم الهاتف: `{MYCASH_NUMBER}`
+
+2️⃣ بعد التحويل، أرسل لقطة الشاشة هنا
+
+⚠️ **تنبيهات هامة:**
+• الصورة يجب أن تكون واضحة
+• يجب أن يظهر **رقم العملية** بوضوح
+• يجب أن يظهر **تاريخ ووقت التحويل**
+• الصورة غير معدلة أو مفوتوشوب
+"""
+    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.answer_callback_query(call.id)
+
+# تسجيل معالجات طرق الدفع
+bot.callback_query_handler(func=lambda call: call.data.startswith("bank_"))(handle_bank_payment)
+bot.callback_query_handler(func=lambda call: call.data.startswith("fawry_"))(handle_fawry_payment)
+bot.callback_query_handler(func=lambda call: call.data.startswith("bravo_"))(handle_bravo_payment)
+bot.callback_query_handler(func=lambda call: call.data.startswith("mycash_"))(handle_mycash_payment)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("crypto_"))
 def pay_crypto(call):
@@ -1045,7 +1133,7 @@ def handle_photo(message):
                 f"❌ **رفض الإشعار**\n\n"
                 f"{error_text}\n\n"
                 f"**متطلبات القبول:**\n"
-                f"• التحويل لأحد الأرقام المعتمدة\n"
+                f"• التحويل لأحد الحسابات المعتمدة\n"
                 f"• المبلغ مطابق لإحدى الباقات\n"
                 f"• الصورة واضحة وغير معدلة\n"
                 f"• يظهر رقم العملية والتاريخ\n"
@@ -1178,16 +1266,15 @@ Thread(target=daily_notification_worker, daemon=True).start()
 print("=" * 50)
 print("✅ بوت طقس السودان - الإصدار المتقدم")
 print(f"💳 OxaPay: جاهز")
-print(f"🏦 بنكك: {MY_ACCOUNT}")
-print(f"💳 فوري: {FAWRY_NUMBER}")
-print(f"📱 برافو: {BRAVO_NUMBER}")
-print(f"💰 ماي كاشي: {MYCASH_NUMBER}")
+print(f"🏦 بنكك: {BANK_ACCOUNT}")
+print(f"💳 فوري - بنك فيصل: {FAWRY_ACCOUNT_NUMBER} ({FAWRY_ACCOUNT_NAME})")
+print(f"📱 برافو: {BRAVO_NUMBER} ({BRAVO_NAME})")
+print(f"💰 ماي كاشي: {MYCASH_NUMBER} ({MYCASH_NAME})")
 print(f"📱 واتساب المطور: +{DEVELOPER_WHATSAPP}")
 print("=" * 50)
 
 keep_alive()
 
-# استخدام polling مع skip_pending لحل مشكلة تعدد النسخ
 while True:
     try:
         bot.polling(none_stop=True, interval=1, timeout=30)
