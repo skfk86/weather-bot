@@ -9,13 +9,15 @@ import threading
 import logging
 from datetime import datetime
 from telebot import types
+from flask import Flask
+from threading import Thread
+import os
 
 # ==================== الإعدادات ====================
 TOKEN = '8665720382:AAEzrjTSqC5Gt5QXXu-gWfYu-vkUodOfwGw'
 OXAPAY_KEY = 'LYMACY-HJVRXA-D02BTO-AHUK8R'
 import os
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
 ADMIN_ID = 8188643525
 MY_ACCOUNT = "4636998"
 USD_TO_SDG_RATE = 3600
@@ -32,6 +34,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 bot = telebot.TeleBot(TOKEN, threaded=True)
+
+# ==================== إعدادات Flask ====================
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is Running!"
+
+def run():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
 
 # ==================== قاعدة البيانات ====================
 class SimpleDB:
@@ -667,4 +684,9 @@ print(f"🏦 بنكك: {MY_ACCOUNT}")
 print(f"📱 واتساب المطور: +{DEVELOPER_WHATSAPP}")
 print("=" * 50)
 
+# تشغيل خادم الويب لمنع توقف Render
+keep_alive()
+
+# تشغيل البوت
 bot.polling(none_stop=True)
+
