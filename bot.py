@@ -36,8 +36,6 @@ MYCASH_NUMBER = "400569264"
 
 OXAPAY_CREATE_URL = 'https://api.oxapay.com/merchants/request'
 OXAPAY_INQUIRY_URL = 'https://api.oxapay.com/merchants/inquiry'
-
-# إعدادات Open-Meteo API
 OPEN_METEO_BASE_URL = "https://api.open-meteo.com/v1/forecast"
 
 logging.basicConfig(
@@ -214,7 +212,6 @@ PLANS = {
 }
 
 # ==================== دوال الطقس عبر Open-Meteo ====================
-# قاموس لتحويل أكواد WMO إلى وصف عربي
 WEATHER_CODES = {
     0: "سماء صافية", 1: "صافي غالباً", 2: "غائم جزئياً", 3: "غائم",
     45: "ضباب", 48: "ضباب متجمد", 51: "رذاذ خفيف", 53: "رذاذ معتدل", 55: "رذاذ كثيف",
@@ -225,11 +222,9 @@ WEATHER_CODES = {
 }
 
 def get_weather_description(code):
-    """تحويل كود WMO إلى وصف نصي بالعربية"""
     return WEATHER_CODES.get(code, "غير معروف")
 
 def get_city_coordinates(city_name):
-    """تحويل اسم المدينة إلى إحداثيات باستخدام Open-Meteo Geocoding API (مجاني)"""
     try:
         url = f"https://geocoding-api.open-meteo.com/v1/search?name={city_name}&count=1&language=ar&format=json"
         resp = requests.get(url, timeout=10)
@@ -238,11 +233,9 @@ def get_city_coordinates(city_name):
             return data["results"][0]["latitude"], data["results"][0]["longitude"], data["results"][0]["name"]
     except:
         pass
-    # إحداثيات افتراضية للخرطوم
     return 15.5007, 32.5599, "الخرطوم"
 
 def get_weather_forecast(city):
-    """جلب توقعات الطقس من Open-Meteo API"""
     lat, lon, city_name = get_city_coordinates(city)
     params = {
         "latitude": lat, "longitude": lon,
@@ -283,8 +276,22 @@ def match_plan(amount):
             return name
     return None
 
+def whatsapp_keyboard():
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("💬 تواصل مع المطور عبر واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+    return markup
+
+def support_keyboard(include_back=False, back_callback="back_to_start"):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("💬 تواصل مع المطور عبر واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+    if include_back:
+        markup.add(types.InlineKeyboardButton("« رجوع", callback_data=back_callback))
+    return markup
+
 # ==================== تحليل الصور ====================
 def analyze_receipt(image_base64, prompt):
+    if not GROQ_API_KEY:
+        return None
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
@@ -308,7 +315,8 @@ def analyze_bank_receipt(img_b64):
     1. رقم الحساب المستلم (يجب: {BANK_ACCOUNT})
     2. المبلغ (رقم فقط)
     3. رقم العملية
-    رد بصيغة JSON: {{"valid": true/false, "account_match": true/false, "amount": 0, "tx_id": ""}}
+    4. تاريخ ووقت التحويل
+    رد بصيغة JSON: {{"valid": true/false, "account_match": true/false, "amount": 0, "tx_id": "", "datetime": ""}}
     """
     return analyze_receipt(img_b64, prompt)
 
@@ -319,7 +327,8 @@ def analyze_fawry_receipt(img_b64):
     2. اسم المستلم (يجب: {FAWRY_ACCOUNT_NAME})
     3. المبلغ (رقم فقط)
     4. رقم العملية
-    رد بصيغة JSON: {{"valid": true/false, "account_match": true/false, "amount": 0, "tx_id": ""}}
+    5. تاريخ ووقت التحويل
+    رد بصيغة JSON: {{"valid": true/false, "account_match": true/false, "amount": 0, "tx_id": "", "datetime": ""}}
     """
     return analyze_receipt(img_b64, prompt)
 
@@ -330,7 +339,8 @@ def analyze_bravo_receipt(img_b64):
     2. اسم المستلم (يجب: {BRAVO_NAME})
     3. المبلغ (رقم فقط)
     4. رقم العملية
-    رد بصيغة JSON: {{"valid": true/false, "account_match": true/false, "amount": 0, "tx_id": ""}}
+    5. تاريخ ووقت التحويل
+    رد بصيغة JSON: {{"valid": true/false, "account_match": true/false, "amount": 0, "tx_id": "", "datetime": ""}}
     """
     return analyze_receipt(img_b64, prompt)
 
@@ -341,7 +351,8 @@ def analyze_mycash_receipt(img_b64):
     2. اسم المستلم (يجب: {MYCASH_NAME})
     3. المبلغ (رقم فقط)
     4. رقم العملية
-    رد بصيغة JSON: {{"valid": true/false, "account_match": true/false, "amount": 0, "tx_id": ""}}
+    5. تاريخ ووقت التحويل
+    رد بصيغة JSON: {{"valid": true/false, "account_match": true/false, "amount": 0, "tx_id": "", "datetime": ""}}
     """
     return analyze_receipt(img_b64, prompt)
 
@@ -377,7 +388,7 @@ def start(message):
         days_left = (datetime.strptime(sub['expires'], '%Y-%m-%d %H:%M:%S.%f') - datetime.now()).days
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(types.InlineKeyboardButton("🔄 تجديد", callback_data="renew"), types.InlineKeyboardButton("🌦️ توقعات", callback_data="weather_forecast"))
-        markup.add(types.InlineKeyboardButton("⚙️ الإعدادات", callback_data="settings"))
+        markup.add(types.InlineKeyboardButton("⚙️ الإعدادات", callback_data="settings"), types.InlineKeyboardButton("📊 لوحة المعلومات", callback_data="show_panel"))
         markup.add(types.InlineKeyboardButton("💬 تواصل مع المطور", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
         bot.send_message(message.chat.id, f"✅ **حسابك مفعل!**\n\n💎 الباقة: {sub['plan']}\n💳 الدفع: {sub['payment_method']}\n⏳ المتبقي: {days_left} يوم", reply_markup=markup, parse_mode="Markdown")
         return
@@ -387,6 +398,12 @@ def start(message):
     markup.add(types.InlineKeyboardButton("📊 لوحة المعلومات", callback_data="show_panel"))
     markup.add(types.InlineKeyboardButton("💬 تواصل مع المطور", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
     bot.send_message(message.chat.id, "🌟 **طقس السودان – النسخة الذهبية** ⛈️\n\nاختر باقتك لمشاهدة المزايا الكاملة:", reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data == "show_panel")
+def show_panel_callback(call):
+    call.message.text = "/panel"
+    info_panel(call.message)
+    bot.answer_callback_query(call.id)
 
 @bot.message_handler(commands=['panel'])
 def info_panel(message):
@@ -427,6 +444,15 @@ def info_panel(message):
     markup.add(types.InlineKeyboardButton("⚙️ الإعدادات", callback_data="settings"), types.InlineKeyboardButton("🌦️ التوقعات", callback_data="weather_forecast"))
     markup.add(types.InlineKeyboardButton("💳 الاشتراك", callback_data="renew"), types.InlineKeyboardButton("📞 تواصل", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
     bot.send_message(message.chat.id, panel_text, reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data == "renew")
+def renew_subscription(call):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for plan, info in PLANS.items():
+        markup.add(types.InlineKeyboardButton(f"{plan} - {info['sdg']:,} SDG (${info['usd']})", callback_data=f"plan_{plan}"))
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data="back_to_start"))
+    bot.edit_message_text("🔄 **تجديد الاشتراك**\n\nاختر باقتك:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "weather_forecast")
 def weather_forecast_callback(call):
@@ -503,7 +529,224 @@ def weather_cmd(message):
             text += f"📅 {fc['date']}: ⬆️{fc['temp_max']:.1f}° ⬇️{fc['temp_min']:.1f}° | {fc['description']}\n"
         bot.reply_to(message, text, parse_mode="Markdown")
 
-# (باقي دوال الدفع ومعالجة الصور تبقى كما هي في النسخة السابقة مع تعديل اسم الدالة)
+@bot.callback_query_handler(func=lambda call: call.data.startswith("plan_"))
+def select_plan(call):
+    plan_name = call.data.replace("plan_", "")
+    info = PLANS[plan_name]
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("💳 دفع بالعملات الرقمية (OxaPay)", callback_data=f"crypto_{plan_name}"),
+        types.InlineKeyboardButton("🏦 تحويل بنكي (بنكك)", callback_data=f"bank_{plan_name}"),
+        types.InlineKeyboardButton("💳 فوري - بنك فيصل", callback_data=f"fawry_{plan_name}"),
+        types.InlineKeyboardButton("📱 برافو", callback_data=f"bravo_{plan_name}"),
+        types.InlineKeyboardButton("💰 ماي كاشي", callback_data=f"mycash_{plan_name}"),
+        types.InlineKeyboardButton("« رجوع", callback_data="renew")
+    )
+    text = f"**{plan_name}**\n\n💰 السعر: **${info['usd']}** / **{info['sdg']:,} SDG**\n📅 المدة: **{info['days']} يوم**\n\n{info['description']}\n\nاختر طريقة الدفع:"
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.answer_callback_query(call.id)
+
+def handle_bank_payment(call):
+    plan_name = call.data.replace("bank_", "")
+    amount = PLANS[plan_name]['sdg']
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
+    markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+    msg = f"🏦 **تحويل بنكي - {plan_name}**\n\n1️⃣ قم بتحويل **{amount:,} SDG** إلى:\n\n📱 رقم الحساب: `{BANK_ACCOUNT}`\n🏛 البنك: {BANK_NAME}\n📲 التطبيق: بنكك\n\n2️⃣ بعد التحويل، أرسل لقطة الشاشة هنا\n\n⚠️ **تنبيهات:** الصورة واضحة ويظهر رقم العملية والتاريخ"
+    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.answer_callback_query(call.id)
+
+def handle_fawry_payment(call):
+    plan_name = call.data.replace("fawry_", "")
+    amount = PLANS[plan_name]['sdg']
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
+    markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+    msg = f"💳 **فوري - {plan_name}**\n\n1️⃣ قم بتحويل **{amount:,} SDG** إلى:\n\n🏛 البنك: {FAWRY_BANK}\n👤 اسم المستلم: {FAWRY_ACCOUNT_NAME}\n📱 رقم الحساب: `{FAWRY_ACCOUNT_NUMBER}`\n\n2️⃣ بعد التحويل، أرسل لقطة الشاشة هنا"
+    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.answer_callback_query(call.id)
+
+def handle_bravo_payment(call):
+    plan_name = call.data.replace("bravo_", "")
+    amount = PLANS[plan_name]['sdg']
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
+    markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+    msg = f"📱 **برافو - {plan_name}**\n\n1️⃣ قم بتحويل **{amount:,} SDG** إلى:\n\n👤 اسم المستلم: {BRAVO_NAME}\n📞 رقم الهاتف: `{BRAVO_NUMBER}`\n\n2️⃣ بعد التحويل، أرسل لقطة الشاشة هنا"
+    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.answer_callback_query(call.id)
+
+def handle_mycash_payment(call):
+    plan_name = call.data.replace("mycash_", "")
+    amount = PLANS[plan_name]['sdg']
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
+    markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+    msg = f"💰 **ماي كاشي - {plan_name}**\n\n1️⃣ قم بتحويل **{amount:,} SDG** إلى:\n\n👤 اسم المستلم: {MYCASH_NAME}\n📞 رقم الهاتف: `{MYCASH_NUMBER}`\n\n2️⃣ بعد التحويل، أرسل لقطة الشاشة هنا"
+    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+    bot.answer_callback_query(call.id)
+
+bot.callback_query_handler(func=lambda call: call.data.startswith("bank_"))(handle_bank_payment)
+bot.callback_query_handler(func=lambda call: call.data.startswith("fawry_"))(handle_fawry_payment)
+bot.callback_query_handler(func=lambda call: call.data.startswith("bravo_"))(handle_bravo_payment)
+bot.callback_query_handler(func=lambda call: call.data.startswith("mycash_"))(handle_mycash_payment)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("crypto_"))
+def pay_crypto(call):
+    plan_name = call.data.replace("crypto_", "")
+    user_id = call.from_user.id
+    amount_usd = PLANS[plan_name]['usd']
+    amount_sdg = PLANS[plan_name]['sdg']
+    bot.edit_message_text("🔄 جاري إنشاء فاتورة OxaPay...", call.message.chat.id, call.message.message_id)
+    result = create_oxapay_invoice(amount_usd, plan_name, user_id)
+    if result['success']:
+        pay_url = result['pay_url']
+        track_id = result['track_id']
+        db.add_tx(track_id, user_id, 'OxaPay', amount_usd, plan_name)
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(types.InlineKeyboardButton("💳 ادفع الآن عبر OxaPay", url=pay_url))
+        markup.add(types.InlineKeyboardButton("🔄 تحقق من الدفع", callback_data=f"check_{track_id}_{plan_name}"))
+        markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
+        msg = f"✅ **تم إنشاء الفاتورة**\n\n💎 {plan_name}\n💰 ${amount_usd} ({amount_sdg:,} SDG)\n🆔 `{track_id}`\n\n1️⃣ اضغط ادفع الآن\n2️⃣ أكمل الدفع\n3️⃣ اضغط تحقق من الدفع"
+        bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(ADMIN_ID, f"📢 فاتورة جديدة\n👤 {user_id}\n💎 {plan_name}\n💰 ${amount_usd}")
+    else:
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(types.InlineKeyboardButton("🏦 تحويل بنكي", callback_data=f"bank_{plan_name}"))
+        markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+        markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
+        bot.edit_message_text("⚠️ تعذر إنشاء الفاتورة. استخدم طريقة دفع أخرى.", call.message.chat.id, call.message.message_id, reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("check_"))
+def check_payment(call):
+    parts = call.data.replace("check_", "").split("_")
+    track_id = parts[0]
+    plan_name = "_".join(parts[1:])
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id, "🔄 جاري التحقق...")
+    result = check_oxapay_payment(track_id)
+    if result['success'] and result['status'] == 'Paid':
+        days = PLANS[plan_name]['days']
+        db.add_sub(user_id, plan_name, days, 'OxaPay')
+        db.reset_attempts(user_id)
+        expires = datetime.now() + timedelta(days=days)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("💬 تواصل مع المطور", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+        bot.edit_message_text(f"🎉 **تم الدفع بنجاح!**\n\n💎 {plan_name}\n📅 صالحة حتى: {expires.strftime('%Y-%m-%d')}", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(ADMIN_ID, f"✅ دفع ناجح\n👤 {user_id}\n💎 {plan_name}")
+    else:
+        pay_url = f"https://oxapay.com/payment/{track_id}"
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(types.InlineKeyboardButton("💳 ادفع الآن", url=pay_url))
+        markup.add(types.InlineKeyboardButton("🔄 تحقق مجدداً", callback_data=f"check_{track_id}_{plan_name}"))
+        markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
+        bot.edit_message_text("⏳ لم يتم تأكيد الدفع بعد.", call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    user_id = message.from_user.id
+    attempts = db.get_attempts(user_id)
+    if attempts and attempts[0] >= 5:
+        markup = whatsapp_keyboard()
+        bot.reply_to(message, "⛔ تجاوزت الحد الأقصى للمحاولات.", reply_markup=markup)
+        return
+    wait = bot.reply_to(message, "🔍 جاري فحص الإشعار...")
+    try:
+        file = bot.get_file(message.photo[-1].file_id)
+        img_data = bot.download_file(file.file_path)
+        img_b64 = base64.b64encode(img_data).decode('utf-8')
+        result = None
+        payment_method = None
+        result = analyze_bank_receipt(img_b64)
+        if result and result.get('account_match'):
+            payment_method = "تحويل بنكي"
+        else:
+            result = analyze_fawry_receipt(img_b64)
+            if result and result.get('account_match'):
+                payment_method = "فوري"
+            else:
+                result = analyze_bravo_receipt(img_b64)
+                if result and result.get('account_match'):
+                    payment_method = "برافو"
+                else:
+                    result = analyze_mycash_receipt(img_b64)
+                    if result and result.get('account_match'):
+                        payment_method = "ماي كاشي"
+        db.inc_attempts(user_id)
+        if result and result.get('valid') and result.get('account_match'):
+            amount = float(result.get('amount', 0))
+            tx_id = result.get('tx_id', f"TX_{user_id}_{int(time.time())}")
+            tx_datetime = result.get('datetime', 'غير معروف')
+            if db.tx_exists(tx_id):
+                bot.edit_message_text(f"❌ رقم العملية مستخدم مسبقاً: `{tx_id}`", message.chat.id, wait.message_id, reply_markup=whatsapp_keyboard(), parse_mode="Markdown")
+                return
+            plan_name = match_plan(amount)
+            if plan_name:
+                db.add_tx(tx_id, user_id, payment_method, amount, plan_name, verified_by="AI")
+                db.add_sub(user_id, plan_name, PLANS[plan_name]['days'], payment_method)
+                db.reset_attempts(user_id)
+                expires = datetime.now() + timedelta(days=PLANS[plan_name]['days'])
+                bot.edit_message_text(f"✅ **تم التفعيل!**\n\n💎 {plan_name}\n💰 {amount:,.0f} SDG\n💳 {payment_method}\n🔢 `{tx_id}`\n📅 {tx_datetime}\n📆 صالح حتى: {expires.strftime('%Y-%m-%d')}", message.chat.id, wait.message_id, reply_markup=whatsapp_keyboard(), parse_mode="Markdown")
+                bot.send_message(ADMIN_ID, f"✅ تفعيل جديد\n👤 {user_id}\n💎 {plan_name}\n💰 {amount:,.0f} SDG\n💳 {payment_method}\n🔢 {tx_id}")
+            else:
+                expected = "\n".join([f"• {n}: {i['sdg']:,} SDG" for n, i in PLANS.items()])
+                bot.edit_message_text(f"⚠️ المبلغ ({amount:,.0f}) غير مطابق.\n\nالمبالغ المطلوبة:\n{expected}", message.chat.id, wait.message_id, reply_markup=support_keyboard(), parse_mode="Markdown")
+        else:
+            bot.edit_message_text("❌ **رفض الإشعار**\n\n• تأكد من التحويل للحساب الصحيح\n• الصورة واضحة وغير معدلة\n• يظهر رقم العملية والتاريخ", message.chat.id, wait.message_id, reply_markup=support_keyboard(), parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Photo error: {e}")
+        bot.edit_message_text("❌ حدث خطأ تقني. حاول مجدداً.", message.chat.id, wait.message_id, reply_markup=whatsapp_keyboard())
+
+@bot.message_handler(commands=['admin'])
+def admin_panel(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    stats = db.get_stats()
+    c = db.conn.cursor()
+    c.execute('SELECT * FROM transactions ORDER BY created_at DESC LIMIT 5')
+    recent_txs = c.fetchall()
+    text = f"🛡️ **لوحة تحكم الأدمن**\n\n👥 المستخدمين: {stats['total_users']}\n✅ النشطون: {stats['active_subs']}\n💰 الإيرادات: {stats['total_revenue']:,.0f} SDG\n\n**آخر 5 معاملات:**\n"
+    for tx in recent_txs:
+        text += f"• {tx['payment_method']} | {tx['amount']:,.0f} SDG | {tx['plan']}\n"
+    bot.reply_to(message, text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['broadcast'])
+def broadcast(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        text = message.text.split(maxsplit=1)[1]
+    except:
+        bot.reply_to(message, "استخدم: /broadcast رسالتك هنا")
+        return
+    users = db.get_all_users()
+    success = 0
+    for uid in users:
+        try:
+            bot.send_message(uid, text)
+            success += 1
+        except:
+            pass
+    bot.reply_to(message, f"✅ تم الإرسال إلى {success} مستخدم.")
+
+@bot.message_handler(commands=['activate'])
+def admin_activate(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        parts = message.text.split()
+        user_id = int(parts[1])
+        plan_name = " ".join(parts[2:])
+        if plan_name not in PLANS:
+            bot.reply_to(message, "الباقة غير موجودة")
+            return
+        db.add_sub(user_id, plan_name, PLANS[plan_name]['days'], 'تفعيل يدوي')
+        db.reset_attempts(user_id)
+        bot.reply_to(message, f"✅ تم تفعيل {user_id} - {plan_name}")
+        bot.send_message(user_id, f"🎉 **تم تفعيل اشتراكك!**\n💎 {plan_name}", parse_mode="Markdown")
+    except:
+        bot.reply_to(message, "استخدام: /activate [user_id] [plan_name]")
 
 # ==================== الإشعارات اليومية ====================
 def daily_notification_worker():
