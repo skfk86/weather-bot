@@ -4,3 +4,9 @@ node_modules/
 *.log
 *.gguf
 .zshrc
+.bash_history
+.bashrc
+.ssh/
+.termux/
+storage/
+.zsh_history
