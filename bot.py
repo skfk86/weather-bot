@@ -7,33 +7,33 @@ import time
 import sqlite3
 import threading
 import logging
+import os
+import hashlib
 from datetime import datetime, timedelta
 from telebot import types
-import firebase_admin
-from firebase_admin import credentials, firestore as fs_admin
+from flask import Flask
+from threading import Thread
 
-# ==================== الإعدادات ====================
-TOKEN = '8665720382:AAEzrjTSqC5Gt5QXXu-gWfYu-vkUodOfwGw'
-OXAPAY_KEY = 'LYMACY-HJVRXA-D02BTO-AHUK8R'
-GROQ_API_KEY = 'API_GROK'
-ADMIN_ID = 8188643525
-MY_ACCOUNT = "4636998"
-USD_TO_SDG_RATE = 3600
-DEVELOPER_WHATSAPP = "249901758765"
+# ==================== الإعدادات (متغيرات البيئة) ====================
+TOKEN = os.environ.get("BOT_TOKEN", "8665720382:AAEzrjTSqC5Gt5QXXu-gWfYu-vkUodOfwGw")
+OXAPAY_KEY = os.environ.get("OXAPAY_KEY", "LYMACY-HJVRXA-D02BTO-AHUK8R")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY", "")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "8188643525"))
+MY_ACCOUNT = os.environ.get("BANK_ACCOUNT", "4636998")
+USD_TO_SDG_RATE = int(os.environ.get("USD_TO_SDG_RATE", "3600"))
+DEVELOPER_WHATSAPP = os.environ.get("DEV_WHATSAPP", "249901758765")
 
-# روابط OxaPay
+# أرقام المحافظ الإلكترونية
+FAWRY_NUMBER = os.environ.get("FAWRY_NUMBER", "51663519")  # فوري - بنك فيصل الإسلامي
+FAWRY_NAME = "القاسم احمد محمد"
+BRAVO_NUMBER = os.environ.get("BRAVO_NUMBER", "71062333")  # برافو
+BRAVO_NAME = "علي القاسم"
+MYCASH_NUMBER = os.environ.get("MYCASH_NUMBER", "400569264")  # ماي كاشي
+MYCASH_NAME = "علي القاسم"
+
 OXAPAY_CREATE_URL = 'https://api.oxapay.com/merchants/request'
 OXAPAY_INQUIRY_URL = 'https://api.oxapay.com/merchants/inquiry'
-
-# ==================== Firebase Admin ====================
-try:
-    cred = credentials.Certificate("serviceAccountKey.json")
-    firebase_admin.initialize_app(cred)
-    fs_db = fs_admin.client()
-    logger_init_msg = "✅ Firebase Admin: متصل"
-except Exception as _fe:
-    fs_db = None
-    logger_init_msg = f"⚠️ Firebase Admin: غير متصل ({_fe})"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,63 +41,165 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-bot = telebot.TeleBot(TOKEN, threaded=True)
+if not GROQ_API_KEY:
+    logger.warning("GROQ_API_KEY غير مضبوط. ميزة تحليل الصور معطلة.")
+if not OPENWEATHER_API_KEY:
+    logger.warning("OPENWEATHER_API_KEY غير مضبوط. ميزة الطقس المباشر معطلة.")
+
+# ==================== حل مشكلة تعدد النسخ ====================
+try:
+    bot = telebot.TeleBot(TOKEN, threaded=False)
+    bot.remove_webhook()
+    time.sleep(0.5)
+    logger.info("✅ تم إزالة webhook بنجاح")
+except Exception as e:
+    logger.error(f"خطأ في إزالة webhook: {e}")
+
+# ==================== Flask ====================
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is Running!"
+
+def run():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
 
 # ==================== قاعدة البيانات ====================
-class SimpleDB:
+class Database:
     def __init__(self):
         self.conn = sqlite3.connect('bot.db', check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
         self.init_db()
-    
+
     def init_db(self):
         c = self.conn.cursor()
+        
         c.execute('''CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             attempts INTEGER DEFAULT 0,
-            last_attempt TIMESTAMP
+            last_attempt TIMESTAMP,
+            referral_code TEXT UNIQUE,
+            referred_by INTEGER,
+            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
+        
         c.execute('''CREATE TABLE IF NOT EXISTS subs (
             user_id INTEGER PRIMARY KEY,
             plan TEXT,
             expires TIMESTAMP,
             payment_method TEXT
         )''')
+        
         c.execute('''CREATE TABLE IF NOT EXISTS transactions (
             tx_id TEXT PRIMARY KEY,
             user_id INTEGER,
-            track_id TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            payment_method TEXT,
+            amount REAL,
+            plan TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            verified_by TEXT
         )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS referrals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            referrer_id INTEGER,
+            referred_id INTEGER,
+            rewarded BOOLEAN DEFAULT 0,
+            date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS user_settings (
+            user_id INTEGER PRIMARY KEY,
+            daily_weather_notify BOOLEAN DEFAULT 0,
+            notify_city TEXT DEFAULT 'Khartoum'
+        )''')
+        
         self.conn.commit()
-    
+        logger.info("✅ تم تهيئة قاعدة البيانات بنجاح")
+
+    def get_or_create_user(self, user_id, referrer_id=None):
+        c = self.conn.cursor()
+        c.execute('SELECT referral_code FROM users WHERE user_id = ?', (user_id,))
+        row = c.fetchone()
+        if not row:
+            code = hashlib.md5(f"{user_id}{time.time()}".encode()).hexdigest()[:8].upper()
+            c.execute('''INSERT INTO users (user_id, referral_code, referred_by, joined_at) 
+                         VALUES (?, ?, ?, datetime('now'))''', 
+                      (user_id, code, referrer_id))
+            self.conn.commit()
+            if referrer_id:
+                c.execute('INSERT INTO referrals (referrer_id, referred_id) VALUES (?, ?)',
+                          (referrer_id, user_id))
+                self.conn.commit()
+                logger.info(f"👥 إحالة جديدة: {referrer_id} دعا {user_id}")
+            return code
+        return row['referral_code']
+
+    def add_referral_reward(self, referrer_id):
+        c = self.conn.cursor()
+        c.execute('SELECT expires FROM subs WHERE user_id = ? AND expires > datetime("now")',
+                  (referrer_id,))
+        sub = c.fetchone()
+        if sub:
+            current_expires = datetime.strptime(sub['expires'], '%Y-%m-%d %H:%M:%S.%f')
+            new_expires = current_expires + timedelta(days=7)
+            c.execute('UPDATE subs SET expires = ? WHERE user_id = ?',
+                      (new_expires, referrer_id))
+            self.conn.commit()
+            return True
+        return False
+
+    def get_referral_stats(self, user_id):
+        c = self.conn.cursor()
+        c.execute('SELECT COUNT(*) as count FROM referrals WHERE referrer_id = ?', (user_id,))
+        count = c.fetchone()['count']
+        c.execute('SELECT referral_code FROM users WHERE user_id = ?', (user_id,))
+        row = c.fetchone()
+        return count, row['referral_code'] if row else None
+
     def get_sub(self, user_id):
         c = self.conn.cursor()
         c.execute('SELECT * FROM subs WHERE user_id = ? AND expires > datetime("now")', (user_id,))
         return c.fetchone()
-    
+
     def add_sub(self, user_id, plan, days, payment_method):
         c = self.conn.cursor()
-        expires = datetime.fromtimestamp(time.time() + days * 86400)
-        c.execute('INSERT OR REPLACE INTO subs VALUES (?, ?, ?, ?)', 
-                  (user_id, plan, expires, payment_method))
+        existing = self.get_sub(user_id)
+        if existing:
+            current_expires = datetime.strptime(existing['expires'], '%Y-%m-%d %H:%M:%S.%f')
+            new_expires = max(current_expires, datetime.now()) + timedelta(days=days)
+            c.execute('UPDATE subs SET plan = ?, expires = ?, payment_method = ? WHERE user_id = ?',
+                      (plan, new_expires, payment_method, user_id))
+        else:
+            expires = datetime.now() + timedelta(days=days)
+            c.execute('INSERT INTO subs VALUES (?, ?, ?, ?)',
+                      (user_id, plan, expires, payment_method))
         self.conn.commit()
-    
-    def add_tx(self, tx_id, user_id, track_id):
+        logger.info(f"✅ اشتراك جديد: {user_id} - {plan} - {days} يوم")
+
+    def add_tx(self, tx_id, user_id, payment_method, amount, plan, verified_by=None):
         c = self.conn.cursor()
-        c.execute('INSERT INTO transactions (tx_id, user_id, track_id) VALUES (?, ?, ?)', 
-                  (tx_id, user_id, track_id))
+        c.execute('''INSERT INTO transactions (tx_id, user_id, payment_method, amount, plan, verified_by) 
+                     VALUES (?, ?, ?, ?, ?, ?)''',
+                  (tx_id, user_id, payment_method, amount, plan, verified_by))
         self.conn.commit()
-    
+
     def tx_exists(self, tx_id):
         c = self.conn.cursor()
         c.execute('SELECT 1 FROM transactions WHERE tx_id = ?', (tx_id,))
         return c.fetchone() is not None
-    
+
     def get_attempts(self, user_id):
         c = self.conn.cursor()
         c.execute('SELECT attempts, last_attempt FROM users WHERE user_id = ?', (user_id,))
         return c.fetchone()
-    
+
     def inc_attempts(self, user_id):
         c = self.conn.cursor()
         c.execute('''INSERT INTO users (user_id, attempts, last_attempt) 
@@ -105,90 +207,138 @@ class SimpleDB:
                      ON CONFLICT(user_id) DO UPDATE 
                      SET attempts = attempts + 1, last_attempt = datetime("now")''', (user_id,))
         self.conn.commit()
-    
+
     def reset_attempts(self, user_id):
         c = self.conn.cursor()
         c.execute('UPDATE users SET attempts = 0 WHERE user_id = ?', (user_id,))
         self.conn.commit()
 
-db = SimpleDB()
+    def get_settings(self, user_id):
+        c = self.conn.cursor()
+        c.execute('SELECT daily_weather_notify, notify_city FROM user_settings WHERE user_id = ?', (user_id,))
+        row = c.fetchone()
+        if not row:
+            c.execute('INSERT INTO user_settings (user_id) VALUES (?)', (user_id,))
+            self.conn.commit()
+            return False, 'Khartoum'
+        return bool(row['daily_weather_notify']), row['notify_city']
+
+    def set_daily_notify(self, user_id, enabled, city='Khartoum'):
+        c = self.conn.cursor()
+        c.execute('''INSERT INTO user_settings (user_id, daily_weather_notify, notify_city) 
+                     VALUES (?, ?, ?) 
+                     ON CONFLICT(user_id) DO UPDATE 
+                     SET daily_weather_notify = ?, notify_city = ?''',
+                  (user_id, enabled, city, enabled, city))
+        self.conn.commit()
+
+    def get_stats(self):
+        c = self.conn.cursor()
+        c.execute('SELECT COUNT(*) as total FROM users')
+        total_users = c.fetchone()['total']
+        c.execute('SELECT COUNT(*) as active FROM subs WHERE expires > datetime("now")')
+        active_subs = c.fetchone()['active']
+        return total_users, active_subs
+
+    def get_all_users(self):
+        c = self.conn.cursor()
+        c.execute('SELECT user_id FROM users')
+        return [row['user_id'] for row in c.fetchall()]
+
+db = Database()
 
 # ==================== الباقات ====================
 PLANS = {
-    "⭐ المبدئية": {"usd": 2.99, "sdg": int(2.99 * USD_TO_SDG_RATE), "days": 30},
-    "🌙 الشهرية": {"usd": 4.99, "sdg": int(4.99 * USD_TO_SDG_RATE), "days": 30},
-    "👑 السنوية": {"usd": 49.00, "sdg": int(49.00 * USD_TO_SDG_RATE), "days": 365}
+    "⭐ المبدئية": {
+        "usd": 2.99,
+        "sdg": int(2.99 * USD_TO_SDG_RATE),
+        "days": 30,
+        "description": """
+**المبدئية – ما تحصل عليه**
+
+• **توقعات 14 يوماً** – بدلاً من 3 أيام فقط في المجاني
+• **30 سؤالاً للمساعد الذكي كل 48 ساعة** – 6 أضعاف المجاني
+• **إنذار مطر مبكر** – ينبهك قبل وقوع المطر بساعات
+• **رادار الأمطار الحي** – احتمالية ساعة بساعة لـ 48 ساعة
+• **مؤشر الرياح الكامل** – السرعة + الاتجاه + الهبات
+• **كاشف الغبار والأتربة** – هل هو غبار عالق أم عاصفة؟
+• **جودة الهواء (AQI)** – حماية صحتك يومياً
+• **مؤشر UV اليومي** + توصية الحماية من الشمس
+• **بدون إعلانات** – تجربة نظيفة تماماً
+"""
+    },
+    "🌙 الشهرية": {
+        "usd": 4.99,
+        "sdg": int(4.99 * USD_TO_SDG_RATE),
+        "days": 30,
+        "description": """
+**الشهرية – ما تحصل عليه**
+
+• **50 سؤالاً يومياً للمساعد الذكي** – 10 أضعاف المجاني
+• **تنبيه السحب الركامية (Cb)** – يحذرك من العواصف الرعدية قبل تشكلها
+• **محرك الغبار الذكي** – 4 مستويات دقيقة: عالق – عجاج – عاصفة ترابية – هبوب
+• **توقع موسم الخريف** – 5 مؤشرات مناخية + رسم بياني تفاعلي
+• **محرك ITCZ** – موقع الفاصل المداري يومياً (مفتاح أمطار السودان)
+• **مؤشر الحر الشديد (Heat Index) + نقطة الندى** – حماية من الإجهاد الحراري
+• **مقارنة الطقس بين مدن السودان** – جداول + رسوم بيانية
+• **تحليل جودة الهواء الكامل** – AQI + PM2.5 + تأثير صحي مفصل
+• **توقعات 14 يوماً** + جميع تنبيهات الخطة المبدئية
+• **بدون إعلانات** – تجربة نظيفة تماماً
+"""
+    },
+    "👑 السنوية": {
+        "usd": 49.00,
+        "sdg": int(49.00 * USD_TO_SDG_RATE),
+        "days": 365,
+        "description": """
+**السنوية – ما تحصل عليه**
+
+• **100 سؤال يومياً للمساعد الذكي** – اسأل بلا حدود
+• **5 محركات تحليل جوي متقدمة (Physio‑Intelligence)** – لا مثيل لها
+• **Nowcasting الفوري** – يتنبأ بالعواصف بالدقائق لا بالساعات
+• **محرك السحب الركامية (Cb)** – خريطة تطور العاصفة الرعدية لحظة بلحظة
+• **كاشف الرياح الهاطبة (Downburst)** – تحذير من الخطر الأشد قبل وقوعه
+• **محرك الهباب الذكي** – يميز بدقة: غبار عالق / عجاج / عاصفة / هبوب
+• **تحليل ITCZ الكامل** – 5 مؤشرات موسمية + موقع الفاصل المداري يومياً
+• **توقع موسم الخريف** + سجل مطري تاريخي لـ 16 مدينة سودانية
+• **مقارنة المدن** + مؤشر SWCI الحصري للطقس السوداني
+• **تحليل ATI البيومناخي** – أثر الطقس على صحتك بشكل علمي
+• **وفر $10.88 سنوياً** – أقل من $4.1 شهرياً مقارنةً بالشهرية
+"""
+    }
 }
 
-# تعيين planId (من التطبيق) ← اسم الباقة + إعدادات
-APP_PLANS = {
-    'starter': {"name": "⭐ المبدئية", "usd": 2.99, "sdg": int(2.99 * USD_TO_SDG_RATE), "days": 30, "dailyAI": 30},
-    'monthly': {"name": "🌙 الشهرية",  "usd": 4.99, "sdg": int(4.99 * USD_TO_SDG_RATE), "days": 30, "dailyAI": 50},
-    'annual':  {"name": "👑 السنوية",  "usd": 49.00,"sdg": int(49.00 * USD_TO_SDG_RATE),"days": 365,"dailyAI": 100}
-}
+# ==================== دوال مساعدة ====================
+def is_subscribed(user_id):
+    return db.get_sub(user_id) is not None
 
-# ==================== Firebase: تفعيل الاشتراك ====================
-def activate_app_subscription(app_uid: str, plan_id: str, order_id: str, method: str = 'telegram_bot') -> bool:
-    """تفعيل الاشتراك مباشرة في Firestore ثم تحديث حالة paymentRequests"""
-    if not fs_db:
-        logger.error("Firebase Admin غير متصل — لا يمكن التفعيل")
-        return False
-
-    plan = APP_PLANS.get(plan_id)
-    if not plan:
-        logger.error(f"planId غير معروف: {plan_id}")
-        return False
-
+def get_weather_forecast(city):
+    if not OPENWEATHER_API_KEY:
+        return None, "⚠️ مفتاح OpenWeather غير مضبوط."
+    url = f"http://api.openweathermap.org/data/2.5/forecast?q={city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ar&cnt=7"
     try:
-        expiry = datetime.now() + timedelta(days=plan['days'])
-        now_iso = datetime.now().isoformat()
-
-        sub_data = {
-            'uid':          app_uid,
-            'planId':       plan_id,
-            'planType':     plan_id,
-            'planName':     plan['name'],
-            'status':       'approved',
-            'active':       True,
-            'dailyAI':      plan['dailyAI'],
-            'requestLimit': plan['dailyAI'],
-            'requestUsed':  0,
-            'lastAIRequest': None,
-            'expiresAt':    expiry.isoformat(),
-            'activatedAt':  now_iso,
-            'method':       method,
-            'source':       'telegram_bot',
-            'orderId':      order_id,
-            'updatedAt':    fs_admin.SERVER_TIMESTAMP,
-        }
-
-        # كتابة الاشتراك
-        fs_db.collection('wxsubscriptions').document(app_uid).set(sub_data, merge=True)
-
-        # تحديث paymentRequest إلى completed
-        fs_db.collection('paymentRequests').document(order_id).update({
-            'status':      'completed',
-            'completedAt': fs_admin.SERVER_TIMESTAMP,
-            'activatedBy': 'telegram_bot',
-        })
-
-        logger.info(f"✅ تفعيل ناجح: uid={app_uid} plan={plan_id} order={order_id}")
-        return True
-
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        if data.get('cod') != "200":
+            return None, data.get('message', 'خطأ غير معروف')
+        
+        forecasts = []
+        for item in data['list'][:7]:
+            forecasts.append({
+                'date': item['dt_txt'],
+                'temp': item['main']['temp'],
+                'description': item['weather'][0]['description'],
+                'humidity': item['main']['humidity']
+            })
+        
+        return {
+            'city': data['city']['name'],
+            'forecasts': forecasts
+        }, None
     except Exception as e:
-        logger.error(f"خطأ في التفعيل: {e}")
-        return False
-
-# ==================== دوول مساعدة ====================
-def create_inline_button(text, callback_data=None, url=None):
-    """إنشاء زر inline صحيح"""
-    if url:
-        return types.InlineKeyboardButton(text, url=url)
-    else:
-        return types.InlineKeyboardButton(text, callback_data=callback_data)
+        return None, str(e)
 
 def whatsapp_keyboard():
-    """لوحة مفاتيح واتساب فقط"""
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton(
         "💬 تواصل مع المطور عبر واتساب",
@@ -197,22 +347,17 @@ def whatsapp_keyboard():
     return markup
 
 def support_keyboard(include_back=False, back_callback="back_to_start"):
-    """لوحة مفاتيح الدعم"""
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(types.InlineKeyboardButton(
         "💬 تواصل مع المطور عبر واتساب",
         url=f"https://wa.me/{DEVELOPER_WHATSAPP}"
     ))
     if include_back:
-        markup.add(types.InlineKeyboardButton(
-            "« رجوع",
-            callback_data=back_callback
-        ))
+        markup.add(types.InlineKeyboardButton("« رجوع", callback_data=back_callback))
     return markup
 
 # ==================== OxaPay ====================
 def create_oxapay_invoice(amount_usd, plan_name, user_id):
-    """إنشاء فاتورة OxaPay"""
     payload = {
         'merchant': OXAPAY_KEY,
         'amount': amount_usd,
@@ -222,75 +367,274 @@ def create_oxapay_invoice(amount_usd, plan_name, user_id):
         'orderId': f"USER_{user_id}_{int(time.time())}",
         'returnUrl': 'https://t.me/SudanWeatherBot'
     }
-    
     headers = {'Content-Type': 'application/json'}
-    
     try:
-        logger.info(f"Creating OxaPay invoice for user {user_id}")
         response = requests.post(OXAPAY_CREATE_URL, json=payload, headers=headers, timeout=15)
         data = response.json()
-        
         if data.get('result') == 100:
-            return {
-                'success': True,
-                'pay_url': data.get('payLink'),  # نستخدم payLink بدلاً من payUrl
-                'track_id': data.get('trackId')
-            }
+            return {'success': True, 'pay_url': data.get('payLink'), 'track_id': data.get('trackId')}
         else:
-            logger.error(f"OxaPay Error: {data.get('message')}")
             return {'success': False, 'error': data.get('message')}
-            
     except Exception as e:
-        logger.error(f"OxaPay Exception: {e}")
         return {'success': False, 'error': str(e)}
 
 def check_oxapay_payment(track_id):
-    """التحقق من حالة الدفع"""
     try:
         response = requests.get(f"{OXAPAY_INQUIRY_URL}?trackId={track_id}", timeout=10)
         data = response.json()
-        
         if data.get('result') == 100:
-            return {
-                'success': True,
-                'status': data.get('status'),
-                'amount': data.get('amount'),
-                'currency': data.get('currency')
-            }
+            return {'success': True, 'status': data.get('status')}
         return {'success': False}
     except:
         return {'success': False}
 
-# ==================== تحليل الصور ====================
-def analyze_receipt(image_base64):
+# ==================== تحليل الصور — Prompts محصّنة ضد الاحتيال ====================
+def _call_groq_vision(prompt: str, image_base64: str):
+    """استدعاء Groq Vision مشترك لجميع دوال التحليل"""
+    if not GROQ_API_KEY:
+        return None
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    
-    prompt = f"""
-    حلل صورة إشعار تحويل بنكي واستخرج:
-    1. رقم الحساب المستلم (يجب: {MY_ACCOUNT})
-    2. المبلغ المحول (رقم فقط)
-    3. رقم العملية
-    
-    رد بصيغة JSON فقط:
-    {{"valid": true/false, "account_match": true/false, "amount": 0, "tx_id": ""}}
-    """
-    
     payload = {
         "model": "llama-3.2-11b-vision-preview",
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": prompt},
+            {"type": "text",      "text": prompt},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
         ]}],
         "response_format": {"type": "json_object"},
-        "temperature": 0.1
+        "temperature": 0.0,
+        "max_tokens": 512
     }
-    
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        return json.loads(response.json()['choices'][0]['message']['content'])
-    except:
+        r = requests.post(url, headers=headers, json=payload, timeout=35)
+        raw = r.json()['choices'][0]['message']['content']
+        return json.loads(raw)
+    except Exception as e:
+        logger.error(f"Groq Vision error: {e}")
         return None
+
+
+def analyze_bank_receipt(image_base64):
+    """تحليل إيصال بنكك — بنك الخرطوم (Prompt محصّن ضد الاحتيال)"""
+    prompt = f"""
+أنت محقق مالي متخصص في كشف الإيصالات المزيفة. مهمتك تحليل صورة إيصال من تطبيق بنكك (بنك الخرطوم).
+
+═══ خطوة 1: التحقق من هوية التطبيق ═══
+هل الصورة من تطبيق بنكك الفعلي؟ ابحث عن:
+- شعار "بنكك" أو "Bank of Khartoum" أو "BOK" في الصورة
+- واجهة مستخدم تتطابق مع تطبيق بنكك (ألوان برتقالية/بيضاء)
+- نص "تم التحويل بنجاح" أو "تأكيد التحويل" أو ما يماثله
+- لا تقبل صوراً من رسائل SMS أو WhatsApp أو تطبيقات أخرى
+
+═══ خطوة 2: التحقق من رقم الحساب المستلم ═══
+- استخرج رقم الحساب أو رقم الهاتف في خانة "المستلم" أو "إلى" أو "Beneficiary"
+- يجب أن يكون مطابقاً تماماً لـ: {MY_ACCOUNT}
+- أي رقم مختلف ولو بخانة واحدة = رفض فوري
+- تأكد أن الحساب هو المستلم وليس المرسل
+
+═══ خطوة 3: استخراج المبلغ ═══
+- استخرج المبلغ من حقل "المبلغ" أو "Amount" بالجنيه السوداني (SDG)
+- تجاهل أي رسوم أو عمولات
+- المبلغ يجب أن يكون رقماً موجباً واضحاً
+
+═══ خطوة 4: رقم العملية/المرجع ═══
+- ابحث عن حقل "رقم العملية" أو "رقم المرجع" أو "Reference" أو "Transaction ID"
+- يجب أن يكون رقماً أو رمزاً فريداً موجوداً في الإيصال
+- إذا لم يوجد رقم مرجعي = رفض
+
+═══ خطوة 5: التاريخ والوقت ═══
+- استخرج التاريخ والوقت بصيغة YYYY-MM-DD HH:MM
+- يجب أن تكون العملية ضمن آخر 24 ساعة
+
+═══ خطوة 6: كشف التزوير ═══
+ارفض الإيصال فوراً إذا لاحظت أي من التالي:
+- نصوص بخطوط أو ألوان مختلفة عن باقي الصورة (علامة على التحرير)
+- حواف أو ظلال غير طبيعية حول الأرقام
+- ضبابية انتقائية في أماكن محددة
+- تناقض في حجم الخط بين الحقول
+- أرقام تبدو ملصقة أو مكتوبة فوق الصورة
+- الإيصال لا يبدو كأنه screenshot حقيقي من التطبيق
+- حالة العملية "فشل" أو "قيد الانتظار" وليست "ناجحة"
+
+═══ الإخراج المطلوب ═══
+رد بـ JSON فقط بدون أي نص خارجه:
+{{"valid": true/false, "account_match": true/false, "amount": 0.0, "tx_id": "", "datetime": "", "app_verified": true/false, "status_success": true/false, "tampering_detected": true/false, "errors": []}}
+
+حيث:
+- valid: true فقط إذا نجحت جميع الخطوات 1-6
+- app_verified: هل الصورة فعلاً من تطبيق بنكك؟
+- status_success: هل حالة العملية "ناجحة" بوضوح؟
+- tampering_detected: هل هناك أي مؤشر على التزوير؟
+- errors: قائمة بأسباب الرفض إن وُجدت
+"""
+    return _call_groq_vision(prompt, image_base64)
+
+def analyze_fawry_receipt(image_base64):
+    """تحليل إيصال فوري — بنك فيصل الإسلامي (Prompt محصّن ضد الاحتيال)"""
+    prompt = f"""
+أنت محقق مالي متخصص في كشف الإيصالات المزيفة. مهمتك تحليل صورة إيصال من تطبيق فوري SD (بنك فيصل الإسلامي السوداني).
+
+═══ خطوة 1: التحقق من هوية التطبيق ═══
+هل الصورة من تطبيق فوري SD الفعلي؟ ابحث عن:
+- شعار "فوري" أو "Fawry SD" أو "بنك فيصل الإسلامي" أو "FIB"
+- واجهة مستخدم تطبيق فوري (ألوان خضراء/بيضاء مميزة لبنك فيصل)
+- نص "تم التحويل" أو "Transfer Successful" أو ما يماثله بوضوح
+- لا تقبل صوراً من رسائل SMS أو WhatsApp أو تطبيقات أخرى
+
+═══ خطوة 2: التحقق من رقم/حساب المستلم ═══
+- استخرج رقم الهاتف أو رقم الحساب في خانة "المستلم" أو "إلى" أو "Beneficiary"
+- يجب أن يكون مطابقاً تماماً لـ: {FAWRY_NUMBER}
+- أي رقم مختلف ولو بخانة واحدة = رفض فوري
+- إذا ظهر اسم المستفيد فيجب أن يكون قريباً من: {FAWRY_NAME}
+- تأكد أن الحساب هو المستلم وليس المرسل
+
+═══ خطوة 3: استخراج المبلغ ═══
+- استخرج المبلغ من حقل "المبلغ" أو "Amount" بالجنيه السوداني
+- تجاهل أي رسوم خدمة أو عمولات بنكية
+- المبلغ يجب أن يكون رقماً موجباً واضحاً
+
+═══ خطوة 4: رقم العملية/المرجع ═══
+- ابحث عن "رقم العملية" أو "Reference No" أو "رقم الإشعار" أو ما يماثله
+- رقم فريد طويل عادةً (أرقام وأحرف)
+- إذا لم يوجد رقم مرجعي = رفض
+
+═══ خطوة 5: التاريخ والوقت ═══
+- استخرج التاريخ والوقت بصيغة YYYY-MM-DD HH:MM
+- يجب أن تكون العملية ضمن آخر 24 ساعة
+
+═══ خطوة 6: كشف التزوير ═══
+ارفض فوراً إذا لاحظت:
+- نصوص بخطوط أو أحجام مختلفة عن باقي الصورة
+- أرقام تبدو ملصقة أو مكتوبة فوق خلفية بلون مختلف طفيف
+- حواف غير طبيعية حول الأرقام الرئيسية (الحساب أو المبلغ)
+- ضبابية أو وضوح انتقائي في أماكن بعينها
+- حالة العملية غير ناجحة أو معلقة أو فاشلة
+- لا تُرى واجهة تطبيق فوري بوضوح
+
+═══ الإخراج المطلوب ═══
+رد بـ JSON فقط:
+{{"valid": true/false, "account_match": true/false, "amount": 0.0, "tx_id": "", "datetime": "", "app_verified": true/false, "status_success": true/false, "tampering_detected": true/false, "errors": []}}
+"""
+    return _call_groq_vision(prompt, image_base64)
+
+def analyze_bravo_receipt(image_base64):
+    """تحليل إيصال برافو — Istinara (Prompt محصّن ضد الاحتيال)"""
+    prompt = f"""
+أنت محقق مالي متخصص في كشف الإيصالات المزيفة. مهمتك تحليل صورة إيصال من تطبيق برافو (Bravo Sudan).
+
+═══ خطوة 1: التحقق من هوية التطبيق ═══
+هل الصورة من تطبيق برافو الفعلي؟ ابحث عن:
+- شعار "برافو" أو "Bravo" أو "Bravo Sudan" أو "استنارة / Istinara"
+- واجهة تطبيق برافو المميزة (ألوان برتقالية/بيضاء لبرافو)
+- نص "تمت العملية بنجاح" أو "تم التحويل" أو "Transaction Successful"
+- الإيصال يكون screenshot من داخل تطبيق برافو وليس رسالة SMS
+- لا تقبل صوراً من واتساب أو تطبيقات أخرى
+
+═══ خطوة 2: التحقق من رقم المحفظة/الهاتف المستلم ═══
+- استخرج رقم الهاتف في خانة "المستلم" أو "إلى" أو "To"
+- يجب أن يكون مطابقاً تماماً لـ: {BRAVO_NUMBER}
+- أي رقم مختلف = رفض فوري
+- إذا ظهر اسم المستفيد يجب أن يكون قريباً من: {BRAVO_NAME}
+- التأكد أن الرقم هو المستلم وليس المرسل
+
+═══ خطوة 3: استخراج المبلغ ═══
+- المبلغ الصافي المحوّل بالجنيه السوداني (بدون عمولة)
+- رقم موجب واضح
+
+═══ خطوة 4: رقم المعاملة/المرجع ═══
+- ابحث عن "رقم العملية" أو "Transaction ID" أو "Reference"
+- برافو يولّد رقم معاملة فريد لكل تحويل
+- إذا لم يوجد = رفض
+
+═══ خطوة 5: التاريخ والوقت ═══
+- صيغة YYYY-MM-DD HH:MM
+- ضمن آخر 24 ساعة
+
+═══ خطوة 6: كشف التزوير ═══
+ارفض فوراً إذا:
+- الأرقام بلون أو خط مختلف عن باقي النص
+- يُرى أثر للقص/اللصق في منطقة الحساب أو المبلغ
+- الخلفية خلف الأرقام الرئيسية تبدو مختلفة اللون (دليل تعديل)
+- العملية في حالة "فاشلة" أو "معلقة"
+- لا تظهر أي عناصر واجهة برافو (شعار، ألوان، أزرار)
+- الصورة تبدو وكأنها معلومات مكتوبة يدوياً وليست screenshot
+
+═══ الإخراج المطلوب ═══
+رد بـ JSON فقط:
+{{"valid": true/false, "account_match": true/false, "amount": 0.0, "tx_id": "", "datetime": "", "app_verified": true/false, "status_success": true/false, "tampering_detected": true/false, "errors": []}}
+"""
+    return _call_groq_vision(prompt, image_base64)
+
+def analyze_mycash_receipt(image_base64):
+    """تحليل إيصال ماي كاشي — Cashi (Prompt محصّن ضد الاحتيال)"""
+    prompt = f"""
+أنت محقق مالي متخصص في كشف الإيصالات المزيفة. مهمتك تحليل صورة إيصال من تطبيق ماي كاشي (MyCashi).
+
+═══ خطوة 1: التحقق من هوية التطبيق ═══
+هل الصورة من تطبيق ماي كاشي الفعلي؟ ابحث عن:
+- شعار "ماي كاشي" أو "MyCashi" أو "كاشي" أو "Cashi"
+- واجهة تطبيق ماي كاشي المميزة (بنفسجية/أرجوانية)
+- نص "تمت العملية بنجاح" أو "تم الإرسال" أو ما يماثله
+- الإيصال يكون screenshot من داخل تطبيق ماي كاشي
+- لا تقبل رسائل SMS أو WhatsApp أو صور من تطبيقات أخرى
+
+═══ خطوة 2: التحقق من رقم الحساب/الهاتف المستلم ═══
+- استخرج رقم الهاتف أو رقم الحساب في خانة "المستلم" أو "إلى" أو "To"
+- يجب أن يكون مطابقاً تماماً لـ: {MYCASH_NUMBER}
+- أي رقم مختلف = رفض فوري
+- إذا ظهر اسم المستفيد يجب أن يكون قريباً من: {MYCASH_NAME}
+- التأكد أن الرقم هو المستلم وليس المرسل
+
+═══ خطوة 3: استخراج المبلغ ═══
+- المبلغ الصافي المحوّل بالجنيه السوداني (ماي كاشي لا يخصم عمولة بين المستخدمين)
+- رقم موجب واضح
+
+═══ خطوة 4: رقم المعاملة/المرجع ═══
+- ابحث عن "رقم العملية" أو "Transaction ID" أو رمز المعاملة
+- ماي كاشي يولّد رقم فريد لكل تحويل
+- إذا لم يوجد رقم = رفض
+
+═══ خطوة 5: التاريخ والوقت ═══
+- صيغة YYYY-MM-DD HH:MM
+- ضمن آخر 24 ساعة
+
+═══ خطوة 6: كشف التزوير ═══
+ارفض فوراً إذا:
+- الأرقام الرئيسية (الحساب، المبلغ) بنمط بصري مختلف عن باقي الإيصال
+- يُلاحظ فرق في الدقة أو التشبع اللوني في منطقة محددة (دليل على التحرير)
+- الخلفية خلف الأرقام تبدو محررة أو مختلفة
+- حالة العملية غير ناجحة
+- لا تظهر أي عناصر مميزة لتطبيق ماي كاشي (شعار، ألوان بنفسجية)
+- الصورة تبدو مصممة يدوياً وليست screenshot حقيقي
+
+═══ الإخراج المطلوب ═══
+رد بـ JSON فقط:
+{{"valid": true/false, "account_match": true/false, "amount": 0.0, "tx_id": "", "datetime": "", "app_verified": true/false, "status_success": true/false, "tampering_detected": true/false, "errors": []}}
+"""
+    return _call_groq_vision(prompt, image_base64)
+
+
+def detect_payment_method(image_base64):
+    """تحديد طريقة الدفع من الصورة — الخطوة الأولى قبل التحليل التفصيلي"""
+    prompt = """
+انظر لهذه الصورة بدقة وحدد من أي تطبيق دفع سوداني هي.
+
+التطبيقات المعروفة:
+- بنكك (Bankak): تطبيق بنك الخرطوم، ألوان برتقالية، شعار "بنكك" أو "BOK"
+- فوري (Fawry SD): تطبيق بنك فيصل الإسلامي، شعار "فوري" أو "FIB" أو "Fawry"
+- برافو (Bravo): محفظة إلكترونية، شعار "برافو" أو "Bravo Sudan"، ألوان برتقالية/بيضاء
+- ماي كاشي (MyCashi): شعار "ماي كاشي" أو "Cashi"، ألوان بنفسجية/أرجوانية
+
+إذا لم تتعرف على أي تطبيق من الأربعة أعلاه، أجب بـ "unknown".
+
+رد بـ JSON فقط:
+{"method": "bankak" | "fawry" | "bravo" | "mycash" | "unknown", "confidence": "high" | "medium" | "low"}
+"""
+    result = _call_groq_vision(prompt, image_base64)
+    if result:
+        return result.get('method', 'unknown'), result.get('confidence', 'low')
+    return 'unknown', 'low'
+
 
 def match_plan(amount):
     for name, info in PLANS.items():
@@ -298,115 +642,59 @@ def match_plan(amount):
             return name
     return None
 
-# ==================== معالج طلبات التطبيق ====================
-def handle_app_subscription_request(message, app_uid: str, plan_id: str, order_id: str):
-    """معالجة طلب اشتراك قادم من التطبيق عبر deep link"""
-    user_id = message.from_user.id
-    plan    = APP_PLANS.get(plan_id)
-
-    if not plan:
-        bot.send_message(user_id, "⚠️ الخطة غير معروفة. تواصل مع الدعم.", reply_markup=whatsapp_keyboard())
-        return
-
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton("💳 دفع بالعملات الرقمية (OxaPay)", callback_data=f"appcrypto_{plan_id}_{app_uid}_{order_id}"),
-        types.InlineKeyboardButton("🏦 تحويل بنكي (بنكك)",             callback_data=f"appbank_{plan_id}_{app_uid}_{order_id}"),
-        types.InlineKeyboardButton("💬 تواصل واتساب للمساعدة",         url=f"https://wa.me/{DEVELOPER_WHATSAPP}")
-    )
-
-    bot.send_message(
-        user_id,
-        f"🛒 **طلب اشتراك من التطبيق**\n\n"
-        f"💎 الخطة: {plan['name']}\n"
-        f"💰 السعر: ${plan['usd']} / {plan['sdg']:,} SDG\n"
-        f"📅 المدة: {plan['days']} يوم\n\n"
-        f"اختر طريقة الدفع:",
-        parse_mode="Markdown",
-        reply_markup=markup
-    )
-
-    bot.send_message(
-        ADMIN_ID,
-        f"🔔 **طلب اشتراك جديد من التطبيق**\n"
-        f"👤 UID: `{app_uid}`\n"
-        f"💎 الخطة: {plan['name']}\n"
-        f"🆔 orderId: `{order_id}`\n"
-        f"📱 Telegram ID: {user_id}",
-        parse_mode="Markdown"
-    )
-
-
 # ==================== أوامر البوت ====================
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
-    text    = message.text or ''
+    referrer_id = None
+    if len(message.text.split()) > 1:
+        code = message.text.split()[1]
+        c = db.conn.cursor()
+        c.execute('SELECT user_id FROM users WHERE referral_code = ?', (code,))
+        row = c.fetchone()
+        if row and row[0] != user_id:
+            referrer_id = row[0]
 
-    # ── deep link من التطبيق: /start subscribe_<planId>_<uid>_<orderId>
-    if 'subscribe_' in text:
-        payload = text.replace('/start subscribe_', '').replace('/start  subscribe_', '').strip()
-        parts   = payload.split('_')
-        # نتوقع: planId _ uid _ orderId (orderId قد يحتوي _ داخله)
-        if len(parts) >= 3:
-            plan_id  = parts[0]
-            app_uid  = parts[1]
-            order_id = '_'.join(parts[2:])
-            handle_app_subscription_request(message, app_uid, plan_id, order_id)
-            return
-    
+    db.get_or_create_user(user_id, referrer_id)
+
     sub = db.get_sub(user_id)
     if sub:
-        days = (datetime.strptime(sub[2], '%Y-%m-%d %H:%M:%S.%f') - datetime.now()).days
-        
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("🔄 تجديد الاشتراك", callback_data="renew"))
-        markup.add(types.InlineKeyboardButton(
-            "💬 تواصل مع المطور",
-            url=f"https://wa.me/{DEVELOPER_WHATSAPP}"
-        ))
-        
+        days_left = (datetime.strptime(sub['expires'], '%Y-%m-%d %H:%M:%S.%f') - datetime.now()).days
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("🔄 تجديد", callback_data="renew"),
+            types.InlineKeyboardButton("🌦️ توقعات", callback_data="weather_forecast")
+        )
+        markup.add(
+            types.InlineKeyboardButton("⚙️ الإعدادات", callback_data="settings"),
+            types.InlineKeyboardButton("👥 الإحالات", callback_data="referral_info")
+        )
+        markup.add(types.InlineKeyboardButton("💬 تواصل مع المطور", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
         bot.send_message(
             message.chat.id,
-            f"✅ **حسابك مفعل!**\n\n"
-            f"💎 الباقة: {sub[1]}\n"
-            f"💳 الدفع: {sub[3]}\n"
-            f"⏳ المتبقي: {days} يوم",
+            f"✅ **حسابك مفعل!**\n\n💎 الباقة: {sub['plan']}\n💳 الدفع: {sub['payment_method']}\n⏳ المتبقي: {days_left} يوم",
             reply_markup=markup,
             parse_mode="Markdown"
         )
         return
-    
-    # عرض الباقات
+
     markup = types.InlineKeyboardMarkup(row_width=1)
     for plan, info in PLANS.items():
         markup.add(types.InlineKeyboardButton(
             f"{plan} - {info['sdg']:,} SDG (${info['usd']})",
             callback_data=f"plan_{plan}"
         ))
-    markup.add(types.InlineKeyboardButton(
-        "💬 تواصل مع المطور عبر واتساب",
-        url=f"https://wa.me/{DEVELOPER_WHATSAPP}"
-    ))
-    
+    markup.add(types.InlineKeyboardButton("👥 نظام الإحالات", callback_data="referral_info"))
+    markup.add(types.InlineKeyboardButton("💬 تواصل مع المطور", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+
     welcome = """
-🌟 **طقس السودان - النسخة الذهبية** ⛈️
+🌟 **طقس السودان – النسخة الذهبية** ⛈️
 
-**المميزات:**
-• توقعات دقيقة لمدة 15 يوم
-• خرائط تفاعلية للأمطار
-• تنبيهات فورية للعواصف
-• بدون إعلانات
+توقعات دقيقة جداً - تحليل جوي احترافي - مساعد ذكي بلا حدود
 
-اختر باقتك:
-    """
-    
-    bot.send_message(
-        message.chat.id,
-        welcome,
-        reply_markup=markup,
-        parse_mode="Markdown"
-    )
+اختر باقتك لمشاهدة المزايا الكاملة:
+"""
+    bot.send_message(message.chat.id, welcome, reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data == "renew")
 def renew_subscription(call):
@@ -416,7 +704,7 @@ def renew_subscription(call):
             f"{plan} - {info['sdg']:,} SDG (${info['usd']})",
             callback_data=f"plan_{plan}"
         ))
-    
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data="back_to_start"))
     bot.edit_message_text(
         "🔄 **تجديد الاشتراك**\n\nاختر باقتك:",
         call.message.chat.id,
@@ -426,23 +714,182 @@ def renew_subscription(call):
     )
     bot.answer_callback_query(call.id)
 
+@bot.callback_query_handler(func=lambda call: call.data == "weather_forecast")
+def weather_forecast_callback(call):
+    user_id = call.from_user.id
+    if not is_subscribed(user_id):
+        bot.answer_callback_query(call.id, "❌ هذه الميزة للمشتركين فقط", show_alert=True)
+        return
+    
+    bot.answer_callback_query(call.id, "🔄 جاري جلب التوقعات...")
+    _, city = db.get_settings(user_id)
+    data, error = get_weather_forecast(city)
+    
+    if error:
+        bot.send_message(call.message.chat.id, f"⚠️ خطأ: {error}")
+        return
+    
+    text = f"🌍 **توقعات الطقس - {data['city']}**\n\n"
+    for fc in data['forecasts']:
+        date_obj = datetime.strptime(fc['date'], '%Y-%m-%d %H:%M:%S')
+        text += f"📅 {date_obj.strftime('%Y-%m-%d %H:%M')}\n"
+        text += f"🌡️ {fc['temp']:.1f}°C | 💧 {fc['humidity']}%\n"
+        text += f"☁️ {fc['description']}\n\n"
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data="back_to_start"))
+    
+    bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data == "settings")
+def settings_menu(call):
+    user_id = call.from_user.id
+    notify, city = db.get_settings(user_id)
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    status = "✅ مفعل" if notify else "❌ معطل"
+    markup.add(types.InlineKeyboardButton(f"إشعارات الطقس اليومية: {status}", callback_data="toggle_notify"))
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data="back_to_start"))
+    bot.edit_message_text(
+        f"⚙️ **الإعدادات**\n\nالمدينة الحالية للإشعارات: **{city}**\nيمكنك تغيير المدينة باستخدام الأمر: `/setcity الخرطوم`",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "toggle_notify")
+def toggle_notify(call):
+    user_id = call.from_user.id
+    current, city = db.get_settings(user_id)
+    db.set_daily_notify(user_id, not current, city)
+    bot.answer_callback_query(call.id, "تم تحديث الإعدادات ✅")
+    settings_menu(call)
+
+@bot.callback_query_handler(func=lambda call: call.data == "back_to_start")
+def back_to_start(call):
+    call.message.text = "/start"
+    start(call.message)
+    bot.answer_callback_query(call.id)
+
+@bot.message_handler(commands=['setcity'])
+def set_notify_city(message):
+    user_id = message.from_user.id
+    try:
+        city = message.text.split(maxsplit=1)[1]
+    except:
+        bot.reply_to(message, "استخدم: `/setcity ود مدني`", parse_mode="Markdown")
+        return
+    notify, _ = db.get_settings(user_id)
+    db.set_daily_notify(user_id, notify, city)
+    bot.reply_to(message, f"✅ تم تعيين **{city}** كمدينة افتراضية للإشعارات.", parse_mode="Markdown")
+
+@bot.message_handler(commands=['weather'])
+def weather_cmd(message):
+    user_id = message.from_user.id
+    if not is_subscribed(user_id):
+        bot.reply_to(message, "❌ هذه الميزة للمشتركين فقط. اشترك الآن للاستمتاع بتوقعات دقيقة!")
+        return
+    try:
+        city = message.text.split(maxsplit=1)[1]
+    except:
+        city = 'Khartoum'
+    data, error = get_weather_forecast(city)
+    if error:
+        bot.reply_to(message, f"⚠️ خطأ: {error}")
+    else:
+        text = f"🌍 **توقعات الطقس - {data['city']}**\n\n"
+        for fc in data['forecasts'][:3]:
+            date_obj = datetime.strptime(fc['date'], '%Y-%m-%d %H:%M:%S')
+            text += f"📅 {date_obj.strftime('%Y-%m-%d %H:%M')}\n"
+            text += f"🌡️ {fc['temp']:.1f}°C | 💧 {fc['humidity']}%\n"
+            text += f"☁️ {fc['description']}\n\n"
+        bot.reply_to(message, text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['referral'])
+def referral_info_cmd(message):
+    user_id = message.from_user.id
+    count, code = db.get_referral_stats(user_id)
+    if not code:
+        code = db.get_or_create_user(user_id)
+    
+    bot_link = f"https://t.me/SudanWeatherBot?start={code}"
+    text = f"""
+👥 **نظام الإحالات**
+
+🔗 **رابط الإحالة الخاص بك:**
+`{bot_link}`
+
+📊 **إحصائياتك:**
+• عدد المدعوين: **{count}**
+• المكافأة: **7 أيام مجانية** لكل مشترك جديد
+
+📋 **كيف يعمل؟**
+1. شارك رابطك مع أصدقائك
+2. عندما يشترك صديقك عبر رابطك
+3. تحصل تلقائياً على 7 أيام إضافية
+
+🎯 انسخ رابطك وابدأ بالدعوة الآن!
+"""
+    bot.reply_to(message, text, parse_mode="Markdown", disable_web_page_preview=True)
+
+@bot.callback_query_handler(func=lambda call: call.data == "referral_info")
+def referral_callback(call):
+    user_id = call.from_user.id
+    count, code = db.get_referral_stats(user_id)
+    if not code:
+        code = db.get_or_create_user(user_id)
+    
+    bot_link = f"https://t.me/SudanWeatherBot?start={code}"
+    text = f"""
+👥 **نظام الإحالات**
+
+🔗 **رابط الإحالة الخاص بك:**
+`{bot_link}`
+
+📊 **إحصائياتك:**
+• عدد المدعوين: **{count}**
+• المكافأة: **7 أيام مجانية** لكل مشترك جديد
+
+📋 **كيف يعمل؟**
+1. شارك رابطك مع أصدقائك
+2. عندما يشترك صديقك عبر رابطك
+3. تحصل تلقائياً على 7 أيام إضافية
+
+🎯 انسخ رابطك وابدأ بالدعوة الآن!
+"""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("📤 مشاركة الرابط", switch_inline_query=f"اشترك في بوت طقس السودان: {bot_link}"))
+    markup.add(types.InlineKeyboardButton("« رجوع", callback_data="back_to_start"))
+    
+    bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode="Markdown", disable_web_page_preview=True)
+    bot.answer_callback_query(call.id)
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("plan_"))
 def select_plan(call):
     plan_name = call.data.replace("plan_", "")
-    
+    info = PLANS[plan_name]
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton("💳 دفع بالعملات الرقمية (OxaPay)", callback_data=f"crypto_{plan_name}"),
         types.InlineKeyboardButton("🏦 تحويل بنكي (بنكك)", callback_data=f"bank_{plan_name}"),
+        types.InlineKeyboardButton("💳 فوري (بنك فيصل الإسلامي)", callback_data=f"fawry_{plan_name}"),
+        types.InlineKeyboardButton("📱 برافو", callback_data=f"bravo_{plan_name}"),
+        types.InlineKeyboardButton("💰 ماي كاشي", callback_data=f"mycash_{plan_name}"),
         types.InlineKeyboardButton("« رجوع", callback_data="renew")
     )
-    
-    info = PLANS[plan_name]
+    text = f"""
+**{plan_name}**
+
+💰 السعر: **${info['usd']}** / **{info['sdg']:,} SDG**
+📅 المدة: **{info['days']} يوم**
+
+{info['description']}
+
+اختر طريقة الدفع:
+"""
     bot.edit_message_text(
-        f"**{plan_name}**\n\n"
-        f"💰 السعر: ${info['usd']} / {info['sdg']:,} SDG\n"
-        f"📅 المدة: {info['days']} يوم\n\n"
-        "اختر طريقة الدفع:",
+        text,
         call.message.chat.id,
         call.message.message_id,
         reply_markup=markup,
@@ -450,43 +897,48 @@ def select_plan(call):
     )
     bot.answer_callback_query(call.id)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("bank_"))
-def pay_bank(call):
-    plan_name = call.data.replace("bank_", "")
-    amount = PLANS[plan_name]['sdg']
-    
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
-    markup.add(types.InlineKeyboardButton(
-        "💬 تواصل واتساب",
-        url=f"https://wa.me/{DEVELOPER_WHATSAPP}"
-    ))
-    
-    msg = f"""
-🏦 **تحويل بنكي - {plan_name}**
+# دوال الدفع الموحدة
+def create_payment_method_handler(method_name, method_display, account_info):
+    def handler(call):
+        plan_name = call.data.replace(f"{method_name}_", "")
+        amount = PLANS[plan_name]['sdg']
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
+        markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+        msg = f"""
+{method_display} **- {plan_name}**
 
 1️⃣ قم بتحويل **{amount:,} SDG** إلى:
 
-📱 رقم الحساب: `{MY_ACCOUNT}`
-🏛 البنك: بنك الخرطوم
-📲 التطبيق: بنكك
+{account_info}
 
 2️⃣ بعد التحويل، أرسل لقطة الشاشة هنا
 
-⚠️ **تنبيهات:**
+⚠️ **تنبيهات هامة:**
 • الصورة يجب أن تكون واضحة
-• يظهر فيها رقم العملية
-• غير معدلة أو مفوتوشوب
-    """
-    
-    bot.edit_message_text(
-        msg,
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=markup,
-        parse_mode="Markdown"
-    )
-    bot.answer_callback_query(call.id)
+• يجب أن يظهر **رقم العملية** بوضوح
+• يجب أن يظهر **تاريخ ووقت التحويل**
+• الصورة غير معدلة أو مفوتوشوب
+"""
+        bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        bot.answer_callback_query(call.id)
+    return handler
+
+# معلومات الحسابات
+bank_info = f"📱 رقم الحساب: `{MY_ACCOUNT}`\n🏛 البنك: بنك الخرطوم\n📲 التطبيق: بنكك"
+fawry_info = f"📱 رقم الحساب: `{FAWRY_NUMBER}`\n🏛 البنك: بنك فيصل الإسلامي\n👤 الاسم: {FAWRY_NAME}\n💳 التطبيق: فوري"
+bravo_info = f"📞 رقم المحفظة: `{BRAVO_NUMBER}`\n👤 الاسم: {BRAVO_NAME}\n📱 التطبيق: برافو"
+mycash_info = f"📞 رقم المحفظة: `{MYCASH_NUMBER}`\n👤 الاسم: {MYCASH_NAME}\n💰 التطبيق: ماي كاشي"
+
+payment_methods = [
+    ('bank', '🏦 تحويل بنكي', bank_info),
+    ('fawry', '💳 فوري', fawry_info),
+    ('bravo', '📱 برافو', bravo_info),
+    ('mycash', '💰 ماي كاشي', mycash_info)
+]
+
+for method, display, account in payment_methods:
+    bot.callback_query_handler(func=lambda call, m=method: call.data.startswith(f"{m}_"))(create_payment_method_handler(method, display, account))
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("crypto_"))
 def pay_crypto(call):
@@ -494,29 +946,20 @@ def pay_crypto(call):
     user_id = call.from_user.id
     amount_usd = PLANS[plan_name]['usd']
     amount_sdg = PLANS[plan_name]['sdg']
-    
-    # رسالة مؤقتة
-    bot.edit_message_text(
-        "🔄 جاري إنشاء فاتورة OxaPay...",
-        call.message.chat.id,
-        call.message.message_id
-    )
-    
-    # إنشاء الفاتورة
+
+    bot.edit_message_text("🔄 جاري إنشاء فاتورة OxaPay...", call.message.chat.id, call.message.message_id)
     result = create_oxapay_invoice(amount_usd, plan_name, user_id)
-    
+
     if result['success']:
         pay_url = result['pay_url']
         track_id = result['track_id']
-        
-        # حفظ المعاملة
-        db.add_tx(f"OXA_{track_id}", user_id, track_id)
-        
+        db.add_tx(track_id, user_id, 'OxaPay', amount_usd, plan_name)
+
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(types.InlineKeyboardButton("💳 ادفع الآن عبر OxaPay", url=pay_url))
         markup.add(types.InlineKeyboardButton("🔄 تحقق من الدفع", callback_data=f"check_{track_id}_{plan_name}"))
         markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
-        
+
         msg = f"""
 ✅ **تم إنشاء الفاتورة بنجاح**
 
@@ -530,47 +973,23 @@ def pay_crypto(call):
 3️⃣ عد للبوت واضغط "تحقق من الدفع"
 
 ⏰ الفاتورة صالحة لمدة 60 دقيقة
-        """
-        
-        bot.edit_message_text(
-            msg,
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup,
-            parse_mode="Markdown"
-        )
-        
-        # إشعار للأدمن
-        bot.send_message(
-            ADMIN_ID,
-            f"📢 **فاتورة جديدة**\n👤 {user_id}\n💎 {plan_name}\n💰 ${amount_usd}\n🆔 {track_id}"
-        )
+"""
+        bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(ADMIN_ID, f"📢 **فاتورة جديدة**\n👤 {user_id}\n💎 {plan_name}\n💰 ${amount_usd}\n🆔 {track_id}")
     else:
-        # فشل إنشاء الفاتورة
         error_msg = result.get('error', 'Unknown error')
         logger.error(f"OxaPay failed for user {user_id}: {error_msg}")
-        
         markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("🏦 تحويل بنكي", callback_data=f"bank_{plan_name}"),
-            types.InlineKeyboardButton(
-                "💬 تواصل واتساب",
-                url=f"https://wa.me/{DEVELOPER_WHATSAPP}"
-            ),
-            types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}")
-        )
-        
+        markup.add(types.InlineKeyboardButton("🏦 تحويل بنكي", callback_data=f"bank_{plan_name}"))
+        markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+        markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
         bot.edit_message_text(
-            f"⚠️ **تعذر إنشاء فاتورة تلقائية**\n\n"
-            f"يمكنك:\n"
-            f"• استخدام التحويل البنكي ({amount_sdg:,} SDG)\n"
-            f"• التواصل مع المطور للمساعدة",
+            f"⚠️ **تعذر إنشاء فاتورة تلقائية**\n\nيمكنك:\n• استخدام طرق الدفع الأخرى\n• التواصل مع المطور للمساعدة",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup,
             parse_mode="Markdown"
         )
-    
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("check_"))
@@ -579,56 +998,44 @@ def check_payment(call):
     track_id = parts[0]
     plan_name = "_".join(parts[1:])
     user_id = call.from_user.id
-    
+
     bot.answer_callback_query(call.id, "🔄 جاري التحقق من الدفع...")
-    
     result = check_oxapay_payment(track_id)
-    
+
     if result['success'] and result['status'] == 'Paid':
-        # تفعيل الاشتراك
         days = PLANS[plan_name]['days']
         db.add_sub(user_id, plan_name, days, 'OxaPay')
         db.reset_attempts(user_id)
-        
-        expires = datetime.fromtimestamp(time.time() + days * 86400)
-        
+
+        expires = datetime.now() + timedelta(days=days)
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton(
-            "💬 تواصل مع المطور",
-            url=f"https://wa.me/{DEVELOPER_WHATSAPP}"
-        ))
-        
+        markup.add(types.InlineKeyboardButton("💬 تواصل مع المطور", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
+
         bot.edit_message_text(
-            f"🎉 **تم الدفع بنجاح!**\n\n"
-            f"💎 الباقة: {plan_name}\n"
-            f"📅 صالحة حتى: {expires.strftime('%Y-%m-%d')}\n\n"
-            "شكراً لاشتراكك! 🌟",
+            f"🎉 **تم الدفع بنجاح!**\n\n💎 الباقة: {plan_name}\n📅 صالحة حتى: {expires.strftime('%Y-%m-%d')}\n\nشكراً لاشتراكك! 🌟",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup,
             parse_mode="Markdown"
         )
-        
-        bot.send_message(
-            ADMIN_ID,
-            f"✅ **دفع ناجح**\n👤 {user_id}\n💎 {plan_name}\n🆔 {track_id}"
-        )
+        bot.send_message(ADMIN_ID, f"✅ **دفع ناجح**\n👤 {user_id}\n💎 {plan_name}\n🆔 {track_id}")
+
+        # مكافأة الإحالة
+        c = db.conn.cursor()
+        c.execute('SELECT referred_by FROM users WHERE user_id = ?', (user_id,))
+        ref = c.fetchone()
+        if ref and ref['referred_by']:
+            if db.add_referral_reward(ref['referred_by']):
+                bot.send_message(ref['referred_by'], "🎁 تمت إضافة 7 أيام مجانية لاشتراكك لأن أحد أصدقائك اشترك عبر رابط الإحالة الخاص بك!")
     else:
-        # إعادة عرض نفس الأزرار
         pay_url = f"https://oxapay.com/payment/{track_id}"
-        
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(types.InlineKeyboardButton("💳 ادفع الآن", url=pay_url))
         markup.add(types.InlineKeyboardButton("🔄 تحقق مجدداً", callback_data=f"check_{track_id}_{plan_name}"))
-        markup.add(types.InlineKeyboardButton(
-            "💬 تواصل واتساب",
-            url=f"https://wa.me/{DEVELOPER_WHATSAPP}"
-        ))
+        markup.add(types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
         markup.add(types.InlineKeyboardButton("« رجوع", callback_data=f"plan_{plan_name}"))
-        
         bot.edit_message_text(
-            f"⏳ **لم يتم تأكيد الدفع بعد**\n\n"
-            f"إذا دفعت بالفعل، انتظر لحظة وحاول مجدداً.",
+            f"⏳ **لم يتم تأكيد الدفع بعد**\n\nإذا دفعت بالفعل، انتظر لحظة وحاول مجدداً.",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup,
@@ -638,314 +1045,292 @@ def check_payment(call):
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     user_id = message.from_user.id
-    
-    # فحص المحاولات
     attempts = db.get_attempts(user_id)
     if attempts and attempts[0] >= 5:
         markup = whatsapp_keyboard()
-        bot.reply_to(
-            message,
-            "⛔ تجاوزت الحد الأقصى للمحاولات.\n\nللحصول على مساعدة، تواصل مع المطور:",
-            reply_markup=markup
-        )
+        bot.reply_to(message, "⛔ تجاوزت الحد الأقصى للمحاولات.\n\nللحصول على مساعدة، تواصل مع المطور:", reply_markup=markup)
         return
-    
-    wait = bot.reply_to(message, "🔍 جاري فحص الإشعار...")
+
+    wait = bot.reply_to(message, "🔍 جاري فحص الإشعار بدقة... (قد تستغرق العملية دقيقة)")
     
     try:
-        # تحميل الصورة
         file = bot.get_file(message.photo[-1].file_id)
         img_data = bot.download_file(file.file_path)
         img_b64 = base64.b64encode(img_data).decode('utf-8')
         
-        # تحليل الصورة
-        result = analyze_receipt(img_b64)
-        db.inc_attempts(user_id)
+        # ─── خطوة 1: تحديد التطبيق أولاً (استدعاء واحد فقط) ───
+        method_id, confidence = detect_payment_method(img_b64)
         
+        ANALYZE_MAP = {
+            'bankak': ('بنكك',       analyze_bank_receipt),
+            'fawry':  ('فوري',       analyze_fawry_receipt),
+            'bravo':  ('برافو',      analyze_bravo_receipt),
+            'mycash': ('ماي كاشي',   analyze_mycash_receipt),
+        }
+        
+        result = None
+        payment_method = None
+
+        if method_id in ANALYZE_MAP and confidence in ('high', 'medium'):
+            payment_method, analyze_fn = ANALYZE_MAP[method_id]
+            result = analyze_fn(img_b64)
+        else:
+            # التطبيق غير معروف — جرب الكل
+            for mid, (pm, fn) in ANALYZE_MAP.items():
+                result = fn(img_b64)
+                if result and result.get('account_match'):
+                    payment_method = pm
+                    break
+
+        db.inc_attempts(user_id)
+
+        # ─── خطوة 2: رفض التلاعب فوراً ───
+        if result and result.get('tampering_detected'):
+            markup = support_keyboard()
+            bot.edit_message_text(
+                "⛔ **تم رفض الإيصال**\n\n"
+                "🔍 اكتشف النظام مؤشرات على تعديل الصورة.\n\n"
+                "إذا كنت تعتقد أن هذا خطأ، يُرجى التواصل مع المطور:",
+                message.chat.id, wait.message_id,
+                reply_markup=markup, parse_mode="Markdown"
+            )
+            bot.send_message(ADMIN_ID,
+                f"⚠️ **محاولة تزوير محتملة**\n👤 {user_id}\n🔍 التطبيق المكتشف: {payment_method or 'غير معروف'}",
+                parse_mode="Markdown")
+            return
+
+        # ─── خطوة 3: التحقق من نجاح العملية ───
+        if result and not result.get('status_success', True):
+            markup = support_keyboard()
+            bot.edit_message_text(
+                "❌ **الإيصال يُظهر عملية غير ناجحة**\n\n"
+                "حالة العملية: فاشلة أو معلقة\n\n"
+                "يُرجى إرسال إيصال عملية مكتملة فقط.",
+                message.chat.id, wait.message_id,
+                reply_markup=markup, parse_mode="Markdown"
+            )
+            return
+
         if result and result.get('valid') and result.get('account_match'):
             amount = float(result.get('amount', 0))
             tx_id = result.get('tx_id', f"TX_{user_id}_{int(time.time())}")
+            tx_datetime = result.get('datetime', 'غير معروف')
             
             if db.tx_exists(tx_id):
                 markup = whatsapp_keyboard()
                 bot.edit_message_text(
-                    "❌ رقم العملية مستخدم مسبقاً\n\nللتواصل مع المطور:",
-                    message.chat.id, 
-                    wait.message_id,
-                    reply_markup=markup
-                )
-                return
-            
-            plan_name = match_plan(amount)
-            
-            if plan_name:
-                db.add_tx(tx_id, user_id, None)
-                db.add_sub(user_id, plan_name, PLANS[plan_name]['days'], 'تحويل بنكي')
-                db.reset_attempts(user_id)
-                
-                expires = datetime.fromtimestamp(time.time() + PLANS[plan_name]['days'] * 86400)
-                
-                markup = whatsapp_keyboard()
-                
-                bot.edit_message_text(
-                    f"✅ **تم التفعيل!**\n\n"
-                    f"💎 {plan_name}\n"
-                    f"💰 {amount:,.0f} SDG\n"
-                    f"📅 صالح حتى: {expires.strftime('%Y-%m-%d')}\n\n"
-                    "🎉 مبروك! للتواصل مع المطور:",
+                    f"❌ **رقم العملية مستخدم مسبقاً**\n\nرقم العملية: `{tx_id}`\n\nللتواصل مع المطور:",
                     message.chat.id, 
                     wait.message_id,
                     reply_markup=markup,
                     parse_mode="Markdown"
                 )
+                return
+
+            plan_name = match_plan(amount)
+            if plan_name:
+                db.add_tx(tx_id, user_id, payment_method, amount, plan_name, verified_by="AI")
+                db.add_sub(user_id, plan_name, PLANS[plan_name]['days'], payment_method)
+                db.reset_attempts(user_id)
+                expires = datetime.now() + timedelta(days=PLANS[plan_name]['days'])
+                markup = whatsapp_keyboard()
+                bot.edit_message_text(
+                    f"✅ **تم التفعيل بنجاح!**\n\n"
+                    f"💎 الباقة: {plan_name}\n"
+                    f"💰 المبلغ: {amount:,.0f} SDG\n"
+                    f"💳 طريقة الدفع: {payment_method}\n"
+                    f"🔢 رقم العملية: `{tx_id}`\n"
+                    f"📅 تاريخ التحويل: {tx_datetime}\n"
+                    f"📆 صالح حتى: {expires.strftime('%Y-%m-%d')}\n\n"
+                    f"🎉 مبروك! للتواصل مع المطور:",
+                    message.chat.id,
+                    wait.message_id,
+                    reply_markup=markup,
+                    parse_mode="Markdown"
+                )
                 
-                bot.send_message(ADMIN_ID, f"✅ تفعيل بنكي: {user_id} | {plan_name} | {amount}")
+                bot.send_message(
+                    ADMIN_ID,
+                    f"✅ **تفعيل جديد**\n👤 {user_id}\n💎 {plan_name}\n💰 {amount:,.0f} SDG\n💳 {payment_method}\n🔢 {tx_id}\n📅 {tx_datetime}",
+                    parse_mode="Markdown"
+                )
             else:
                 expected = "\n".join([f"• {n}: {i['sdg']:,} SDG" for n, i in PLANS.items()])
                 markup = support_keyboard()
-                
                 bot.edit_message_text(
-                    f"⚠️ المبلغ ({amount:,.0f}) غير مطابق لأي باقة.\n\n"
+                    f"⚠️ **المبلغ غير مطابق**\n\n"
+                    f"المبلغ المستلم: {amount:,.0f} SDG\n\n"
                     f"المبالغ المطلوبة:\n{expected}\n\n"
                     f"للتواصل مع المطور:",
-                    message.chat.id, 
+                    message.chat.id,
                     wait.message_id,
                     reply_markup=markup,
                     parse_mode="Markdown"
                 )
         else:
+            errors = result.get('errors', []) if result else []
+            error_text = "\n".join([f"• {e}" for e in errors]) if errors else "• لم يتم التعرف على الصورة كإيصال دفع صالح"
+            
+            # عرض الأرقام المعتمدة بوضوح
+            accounts_info = (
+                f"**الأرقام المعتمدة للاستلام:**\n"
+                f"• بنكك (بنك الخرطوم): `{MY_ACCOUNT}`\n"
+                f"• فوري (بنك فيصل): `{FAWRY_NUMBER}` — {FAWRY_NAME}\n"
+                f"• برافو: `{BRAVO_NUMBER}` — {BRAVO_NAME}\n"
+                f"• ماي كاشي: `{MYCASH_NUMBER}` — {MYCASH_NAME}"
+            )
+            
             markup = support_keyboard()
             bot.edit_message_text(
                 f"❌ **رفض الإشعار**\n\n"
-                f"• تأكد من التحويل للحساب: `{MY_ACCOUNT}`\n"
-                f"• الصورة واضحة وغير معدلة\n"
-                f"• يظهر رقم العملية بوضوح\n\n"
+                f"{error_text}\n\n"
+                f"{accounts_info}\n\n"
+                f"**شروط القبول:**\n"
+                f"• الإيصال screenshot من التطبيق مباشرةً\n"
+                f"• العملية بحالة «ناجحة» بوضوح\n"
+                f"• يظهر رقم المرجع والتاريخ\n"
+                f"• التحويل خلال 24 ساعة\n"
+                f"• الصورة غير معدلة\n\n"
                 f"للتواصل مع المطور:",
-                message.chat.id, 
+                message.chat.id,
                 wait.message_id,
                 reply_markup=markup,
                 parse_mode="Markdown"
             )
-            
     except Exception as e:
         logger.error(f"Photo error: {e}")
         markup = whatsapp_keyboard()
         bot.edit_message_text(
-            "❌ حدث خطأ. حاول مجدداً أو تواصل مع المطور:",
+            "❌ حدث خطأ تقني. حاول مجدداً أو تواصل مع المطور:",
             message.chat.id,
             wait.message_id,
             reply_markup=markup
         )
 
-# ==================== callbacks طلبات التطبيق ====================
-@bot.callback_query_handler(func=lambda call: call.data.startswith("appcrypto_"))
-def app_pay_crypto(call):
-    """دفع كريبتو لطلب قادم من التطبيق"""
-    raw      = call.data.replace("appcrypto_", "")
-    parts    = raw.split("_")
-    if len(parts) < 3:
-        bot.answer_callback_query(call.id, "بيانات غير صحيحة")
+@bot.message_handler(commands=['admin'])
+def admin_panel(message):
+    if message.from_user.id != ADMIN_ID:
         return
-    plan_id  = parts[0]
-    app_uid  = parts[1]
-    order_id = "_".join(parts[2:])
-    user_id  = call.from_user.id
-    plan     = APP_PLANS.get(plan_id)
-    if not plan:
-        bot.answer_callback_query(call.id, "الخطة غير موجودة")
-        return
-
-    bot.edit_message_text("🔄 جاري إنشاء فاتورة OxaPay...", call.message.chat.id, call.message.message_id)
-
-    result = create_oxapay_invoice(plan['usd'], plan['name'], user_id)
-    if result['success']:
-        pay_url  = result['pay_url']
-        track_id = result['track_id']
-        db.add_tx(f"OXA_{track_id}", user_id, track_id)
-
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("💳 ادفع الآن عبر OxaPay", url=pay_url),
-            types.InlineKeyboardButton("🔄 تحقق من الدفع",         callback_data=f"appcheck_{track_id}_{plan_id}_{app_uid}_{order_id}"),
-            types.InlineKeyboardButton("💬 تواصل واتساب",          url=f"https://wa.me/{DEVELOPER_WHATSAPP}")
-        )
-        bot.edit_message_text(
-            f"✅ **تم إنشاء الفاتورة**\n\n"
-            f"💎 {plan['name']} — ${plan['usd']}\n"
-            f"🆔 تتبع: `{track_id}`\n\n"
-            f"1️⃣ اضغط «ادفع الآن»\n"
-            f"2️⃣ أكمل الدفع\n"
-            f"3️⃣ عد واضغط «تحقق من الدفع»\n\n"
-            f"⏰ الفاتورة صالحة 60 دقيقة",
-            call.message.chat.id, call.message.message_id,
-            reply_markup=markup, parse_mode="Markdown"
-        )
-        bot.send_message(ADMIN_ID, f"📢 فاتورة OxaPay (تطبيق)\n👤 UID: {app_uid}\n💎 {plan['name']}\n🆔 {track_id}")
-    else:
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("🏦 تحويل بنكي بدلاً من ذلك", callback_data=f"appbank_{plan_id}_{app_uid}_{order_id}"),
-            types.InlineKeyboardButton("💬 تواصل واتساب",             url=f"https://wa.me/{DEVELOPER_WHATSAPP}")
-        )
-        bot.edit_message_text("⚠️ تعذّر إنشاء الفاتورة. جرّب التحويل البنكي.", call.message.chat.id, call.message.message_id, reply_markup=markup)
-    bot.answer_callback_query(call.id)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("appbank_"))
-def app_pay_bank(call):
-    """تحويل بنكي لطلب قادم من التطبيق"""
-    raw      = call.data.replace("appbank_", "")
-    parts    = raw.split("_")
-    if len(parts) < 3:
-        bot.answer_callback_query(call.id, "بيانات غير صحيحة")
-        return
-    plan_id  = parts[0]
-    app_uid  = parts[1]
-    order_id = "_".join(parts[2:])
-    plan     = APP_PLANS.get(plan_id)
-    if not plan:
-        bot.answer_callback_query(call.id, "الخطة غير موجودة")
-        return
-
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton("💬 تواصل واتساب بعد التحويل", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"),
-        types.InlineKeyboardButton("« رجوع", callback_data=f"appcrypto_{plan_id}_{app_uid}_{order_id}")
-    )
-    bot.edit_message_text(
-        f"🏦 **تحويل بنكي — {plan['name']}**\n\n"
-        f"1️⃣ حوّل **{plan['sdg']:,} SDG** إلى:\n\n"
-        f"📱 رقم الحساب: `{MY_ACCOUNT}`\n"
-        f"🏛 البنك: بنك الخرطوم\n"
-        f"📲 التطبيق: بنكك\n\n"
-        f"2️⃣ أرسل لقطة الشاشة هنا أو تواصل واتساب\n\n"
-        f"⚠️ بعد التحويل سيتم تفعيل حسابك خلال دقائق.\n"
-        f"🆔 معرف طلبك: `{order_id}`",
-        call.message.chat.id, call.message.message_id,
-        reply_markup=markup, parse_mode="Markdown"
-    )
-    bot.answer_callback_query(call.id)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("appcheck_"))
-def app_check_payment(call):
-    """التحقق من دفع OxaPay وتفعيل اشتراك التطبيق"""
-    raw      = call.data.replace("appcheck_", "")
-    parts    = raw.split("_")
-    if len(parts) < 4:
-        bot.answer_callback_query(call.id, "بيانات غير صحيحة")
-        return
-    track_id = parts[0]
-    plan_id  = parts[1]
-    app_uid  = parts[2]
-    order_id = "_".join(parts[3:])
-
-    bot.answer_callback_query(call.id, "🔄 جاري التحقق...")
-    result = check_oxapay_payment(track_id)
-
-    if result['success'] and result.get('status') == 'Paid':
-        # تفعيل الاشتراك في Firebase
-        ok = activate_app_subscription(app_uid, plan_id, order_id, method='oxapay')
-        # تفعيل في db المحلي للبوت
-        plan = APP_PLANS.get(plan_id, {})
-        db.add_sub(call.from_user.id, plan.get('name',''), plan.get('days', 30), 'OxaPay')
-        db.reset_attempts(call.from_user.id)
-
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("💬 تواصل مع المطور", url=f"https://wa.me/{DEVELOPER_WHATSAPP}"))
-
-        status_msg = "✅ **تم الدفع وتفعيل حسابك في التطبيق!**" if ok else "✅ **تم الدفع!** ⚠️ تواصل مع الدعم لتفعيل التطبيق."
-        bot.edit_message_text(
-            f"{status_msg}\n\n💎 {plan.get('name','')}\n🎉 افتح التطبيق وستجد حسابك مفعلاً.",
-            call.message.chat.id, call.message.message_id,
-            reply_markup=markup, parse_mode="Markdown"
-        )
-        bot.send_message(ADMIN_ID, f"✅ دفع OxaPay (تطبيق)\n👤 UID: {app_uid}\n💎 {plan_id}\n🆔 {track_id}\nFirebase: {'✅' if ok else '❌'}")
-    else:
-        pay_url = f"https://oxapay.com/payment/{track_id}"
-        markup  = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("💳 ادفع الآن", url=pay_url),
-            types.InlineKeyboardButton("🔄 تحقق مجدداً", callback_data=call.data),
-            types.InlineKeyboardButton("💬 تواصل واتساب", url=f"https://wa.me/{DEVELOPER_WHATSAPP}")
-        )
-        bot.edit_message_text(
-            "⏳ لم يتم تأكيد الدفع بعد.\nإذا دفعت، انتظر لحظة وحاول مجدداً.",
-            call.message.chat.id, call.message.message_id,
-            reply_markup=markup, parse_mode="Markdown"
-        )
-
-
-@bot.message_handler(commands=['support', 'help'])
-def support_command(message):
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton(
-        "💬 تواصل مع المطور عبر واتساب",
-        url=f"https://wa.me/{DEVELOPER_WHATSAPP}"
-    ))
-    markup.add(types.InlineKeyboardButton(
-        "🏠 الرجوع للقائمة الرئيسية",
-        callback_data="renew"
-    ))
-    
-    bot.send_message(
-        message.chat.id,
-        f"📞 **الدعم الفني**\n\n"
-        f"للحصول على مساعدة فورية، تواصل مع المطور عبر واتساب:\n\n"
-        f"📱 +{DEVELOPER_WHATSAPP}",
-        reply_markup=markup,
+    total, active = db.get_stats()
+    bot.reply_to(message,
+        f"📊 **لوحة التحكم**\n\n"
+        f"👥 إجمالي المستخدمين: {total}\n"
+        f"✅ المشتركون النشطون: {active}\n\n"
+        f"**أوامر الأدمن:**\n"
+        f"/broadcast [رسالة] - إرسال للجميع\n"
+        f"/activate [user_id] [plan_name] - تفعيل يدوي\n"
+        f"/stats - إحصائيات مفصلة",
         parse_mode="Markdown"
     )
+
+@bot.message_handler(commands=['stats'])
+def detailed_stats(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    c = db.conn.cursor()
+    c.execute('SELECT COUNT(*) as total FROM transactions')
+    total_tx = c.fetchone()['total']
+    
+    c.execute('''SELECT payment_method, COUNT(*) as count, SUM(amount) as total_amount 
+                 FROM transactions GROUP BY payment_method''')
+    methods = c.fetchall()
+    
+    text = "📊 **إحصائيات مفصلة**\n\n"
+    text += f"📦 إجمالي المعاملات: {total_tx}\n\n"
+    text += "**طرق الدفع:**\n"
+    for m in methods:
+        text += f"• {m['payment_method']}: {m['count']} معاملة - {m['total_amount']:,.0f} SDG\n"
+    
+    bot.reply_to(message, text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['broadcast'])
+def broadcast(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        text = message.text.split(maxsplit=1)[1]
+    except:
+        bot.reply_to(message, "استخدم: /broadcast رسالتك هنا")
+        return
+    users = db.get_all_users()
+    success = 0
+    for uid in users:
+        try:
+            bot.send_message(uid, text)
+            success += 1
+        except:
+            pass
+    bot.reply_to(message, f"✅ تم الإرسال إلى {success} مستخدم.")
 
 @bot.message_handler(commands=['activate'])
 def admin_activate(message):
     if message.from_user.id != ADMIN_ID:
         return
-    
     try:
         parts = message.text.split()
         user_id = int(parts[1])
         plan_name = " ".join(parts[2:])
-        
         if plan_name not in PLANS:
             bot.reply_to(message, "الباقة غير موجودة")
             return
-        
         db.add_sub(user_id, plan_name, PLANS[plan_name]['days'], 'تفعيل يدوي')
         db.reset_attempts(user_id)
-        
         bot.reply_to(message, f"✅ تم تفعيل {user_id} - {plan_name}")
         bot.send_message(user_id, f"🎉 **تم تفعيل اشتراكك!**\n💎 {plan_name}", parse_mode="Markdown")
     except:
         bot.reply_to(message, "استخدام: /activate [user_id] [plan_name]")
 
-@bot.message_handler(commands=['appactivate'])
-def admin_app_activate(message):
-    """تفعيل يدوي لمستخدم التطبيق: /appactivate <app_uid> <plan_id> <order_id>"""
-    if message.from_user.id != ADMIN_ID:
-        return
-    try:
-        parts    = message.text.split()
-        app_uid  = parts[1]
-        plan_id  = parts[2]
-        order_id = parts[3] if len(parts) > 3 else f"MANUAL_{int(time.time())}"
+# ==================== الإشعارات اليومية ====================
+def daily_notification_worker():
+    while True:
+        now = datetime.now()
+        if now.hour == 8 and now.minute == 0:
+            logger.info("بدء إرسال الإشعارات اليومية...")
+            c = db.conn.cursor()
+            c.execute('SELECT user_id, notify_city FROM user_settings WHERE daily_weather_notify = 1')
+            rows = c.fetchall()
+            for row in rows:
+                user_id, city = row['user_id'], row['notify_city']
+                if is_subscribed(user_id):
+                    data, error = get_weather_forecast(city)
+                    if not error and data['forecasts']:
+                        fc = data['forecasts'][0]
+                        text = f"""
+☀️ **نشرة الطقس اليومية - {city}**
+📅 {datetime.now().strftime('%Y-%m-%d')}
+🌡️ الحرارة: {fc['temp']:.1f}°C
+💧 الرطوبة: {fc['humidity']}%
+☁️ الحالة: {fc['description']}
 
-        ok = activate_app_subscription(app_uid, plan_id, order_id, method='manual')
-        if ok:
-            bot.reply_to(message, f"✅ تم تفعيل التطبيق\nUID: {app_uid}\nخطة: {plan_id}")
+للتوقعات الكاملة استخدم /weather
+"""
+                        try:
+                            bot.send_message(user_id, text, parse_mode="Markdown")
+                        except Exception as e:
+                            logger.error(f"فشل إرسال إشعار لـ {user_id}: {e}")
+            time.sleep(60)
         else:
-            bot.reply_to(message, "❌ فشل التفعيل — راجع السجل")
-    except (IndexError, Exception) as e:
-        bot.reply_to(message, f"الاستخدام: /appactivate <app_uid> <plan_id> [order_id]\nخطأ: {e}")
+            time.sleep(30)
 
+Thread(target=daily_notification_worker, daemon=True).start()
 
 # ==================== تشغيل ====================
 print("=" * 50)
-print("✅ بوت طقس السودان - يعمل الآن")
-print(f"💳 OxaPay: جاهز وفعال")
+print("✅ بوت طقس السودان - الإصدار المتقدم")
+print(f"💳 OxaPay: جاهز")
 print(f"🏦 بنكك: {MY_ACCOUNT}")
+print(f"💳 فوري (فيصل): {FAWRY_NUMBER} - {FAWRY_NAME}")
+print(f"📱 برافو: {BRAVO_NUMBER} - {BRAVO_NAME}")
+print(f"💰 ماي كاشي: {MYCASH_NUMBER} - {MYCASH_NAME}")
 print(f"📱 واتساب المطور: +{DEVELOPER_WHATSAPP}")
-print(logger_init_msg)
 print("=" * 50)
 
-bot.polling(none_stop=True)
+keep_alive()
+
+while True:
+    try:
+        bot.polling(none_stop=True, interval=1, timeout=30)
+    except Exception as e:
+        logger.error(f"Polling error: {e}")
+        time.sleep(15)
