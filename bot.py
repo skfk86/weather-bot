@@ -783,8 +783,6 @@ def handle_uid_message(message):
     uid    = message.from_user.id
     fb_uid = message.text.strip()
 
-    db.ensure(uid, message.from_user.username or '')   # [FIX v4.2] تسجيل المستخدم في جدول users
-
     if db.is_banned(uid):
         bot.reply_to(message, '⛔ حسابك محظور.')
         return
@@ -932,11 +930,8 @@ def cmd_status(message):
     else:
         bot.reply_to(message,
             '❌ *لا يوجد اشتراك نشط*\n\n'
-            '📋 *للاشتراك:*\n'
-            '1️⃣ افتح تطبيق *طقس السودان*\n'
-            '2️⃣ اذهب إلى *الملف الشخصي* 👤\n'
-            '3️⃣ انسخ *معرّفك (UID)* من البطاقة الذهبية\n'
-            '4️⃣ أرسله هنا واختر خطتك',
+            'للاشتراك، افتح البوت من داخل التطبيق:\n'
+            'طقس السودان ← اشترك PRO',
             parse_mode='Markdown')
 
 @bot.message_handler(commands=['myid'])
@@ -1239,12 +1234,8 @@ def handle_photo(message):
     fb_uid = db.get_fb_uid(uid)
     if not fb_uid:
         bot.reply_to(message,
-            '⚠️ *لم يتم ربط حسابك بعد*\n\n'
-            '📋 *الخطوات:*\n'
-            '1️⃣ افتح تطبيق *طقس السودان*\n'
-            '2️⃣ اذهب إلى *الملف الشخصي* 👤\n'
-            '3️⃣ انسخ *معرّفك (UID)* من البطاقة الذهبية\n'
-            '4️⃣ *أرسله هنا*، ثم أرسل الإيصال مجدداً',
+            '⚠️ *للاشتراك، افتح البوت من التطبيق*\n\n'
+            'طقس السودان ← اشترك PRO',
             reply_markup=_contact_kb(), parse_mode='Markdown')
         return
 
@@ -1564,7 +1555,7 @@ def cmd_broadcast(message):
 #  تشغيل البوت
 # ══════════════════════════════════════════════════════
 print('=' * 60)
-print('✅ Sudan Weather Bot v4.2 — متكامل مع التطبيق')
+print('✅ Sudan Weather Bot v4.0 — متكامل مع التطبيق')
 print(f'🏦 بنكك: {MY_ACCOUNT}  |  💳 فوري: {FAWRY_NUMBER}')
 print(f'📱 برافو: {BRAVO_NUMBER}  |  💰 ماي كاشي: {MYCASH_NUMBER}')
 print(f'💱 سعر الصرف: {_get_rate():,} SDG/USD (ديناميكي)')
